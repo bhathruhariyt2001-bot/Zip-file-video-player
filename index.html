@@ -6,524 +6,219 @@ layout: null
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>VLC Stream Player</title>
+  <title>VLC Player Debug Engine</title>
   <style>
-    :root {
-      --vlc: #ff8800;
-      --bg: #000000;
-    }
-    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
-    html, body {
+    :root { --vlc: #ff8800; --bg: #000; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
       background: var(--bg);
       color: #fff;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      width: 100vw;
-      height: 100vh;
-      overflow: hidden;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    /* DIRECT VISIBLE PICKER BUTTON */
-    #selectModal {
-      position: absolute;
-      z-index: 1000;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      min-height: 100vh;
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 18px;
-      background: #111827;
-      padding: 36px 28px;
-      border-radius: 16px;
-      border: 1px solid #1f2937;
-      text-align: center;
-      box-shadow: 0 20px 40px rgba(0,0,0,0.9);
-      max-width: 90vw;
-      width: 380px;
-    }
-    #selectModal h2 { font-size: 1.25rem; font-weight: 700; color: #f3f4f6; }
-    #selectModal p { font-size: 0.85rem; color: #9ca3af; line-height: 1.4; }
-
-    /* Button wrapper that overlays the real input directly over the UI */
-    .btn-container {
-      position: relative;
-      overflow: hidden;
-      display: inline-block;
-      border-radius: 28px;
-      background: var(--vlc);
-    }
-    .fake-btn {
-      display: block;
-      color: #000;
-      font-weight: 700;
-      padding: 14px 32px;
-      font-size: 1rem;
-      pointer-events: none;
-    }
-    /* Mobile-Safe transparent input directly receiving user touch */
-    #zipInput {
-      position: absolute;
-      left: 0;
-      top: 0;
-      width: 100%;
-      height: 100%;
-      opacity: 0;
-      cursor: pointer;
-      font-size: 100px;
-      display: block !important;
-    }
-
-    #playerContainer {
-      position: relative;
-      width: 100vw;
-      height: 100vh;
-      display: flex;
-      align-items: center;
       justify-content: center;
+      padding: 16px;
+    }
+    .card {
+      background: #111827;
+      border: 1px solid #1f2937;
+      border-radius: 14px;
+      padding: 24px;
+      width: 100%;
+      max-width: 420px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      text-align: center;
+    }
+    /* Standard standard input button - impossible for Android to block */
+    input[type="file"] {
+      width: 100%;
+      padding: 12px;
+      background: #1f2937;
+      color: #fff;
+      border: 1px dashed var(--vlc);
+      border-radius: 8px;
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+    #debugBox {
       background: #000;
-      overflow: hidden;
+      border: 1px solid #374151;
+      border-radius: 6px;
+      padding: 10px;
+      text-align: left;
+      font-family: monospace;
+      font-size: 0.75rem;
+      color: #38bdf8;
+      max-height: 140px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    #videoContainer {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; width: 100vw; height: 100vh;
+      background: #000;
+      z-index: 999;
     }
     video { width: 100%; height: 100%; object-fit: contain; }
-
-    .controls-overlay {
-      position: absolute;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background: linear-gradient(180deg, rgba(0,0,0,0.8) 0%, transparent 25%, transparent 75%, rgba(0,0,0,0.85) 100%);
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      padding: 16px 24px;
-      opacity: 0;
-      transition: opacity 0.25s ease;
-      pointer-events: none;
-      z-index: 10;
-    }
-    .controls-overlay.active { opacity: 1; pointer-events: auto; }
-
-    .top-bar { display: flex; justify-content: space-between; align-items: center; font-size: 1rem; }
-    .title-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60vw; font-weight: 600; }
-    .ram-badge { font-size: 0.72rem; color: #10b981; border: 1px solid #10b981; padding: 2px 6px; border-radius: 4px; }
-
-    .bottom-bar { display: flex; flex-direction: column; gap: 8px; }
-
-    .progress-slider {
-      -webkit-appearance: none;
-      width: 100%;
-      height: 6px;
-      border-radius: 3px;
-      background: rgba(255, 255, 255, 0.25);
-      outline: none;
-      cursor: pointer;
-    }
-    .progress-slider::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      width: 16px;
-      height: 16px;
-      border-radius: 50%;
-      background: var(--vlc);
-      cursor: pointer;
-      box-shadow: 0 0 8px rgba(255, 136, 0, 0.8);
-    }
-
-    .btn-row { display: flex; justify-content: space-between; align-items: center; }
-    .left-btns, .right-btns { display: flex; align-items: center; gap: 18px; }
-    
-    .icon-btn {
-      background: none;
-      border: none;
-      color: #fff;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 6px;
-    }
-    .icon-btn svg { width: 22px; height: 22px; fill: currentColor; }
-    .icon-btn:active { transform: scale(0.9); }
-    
-    .time-badge { font-size: 0.85rem; color: #e2e8f0; font-family: monospace; }
-    .speed-select {
-      background: rgba(0,0,0,0.6);
-      border: 1px solid rgba(255, 255, 255, 0.3);
-      color: #fff;
-      border-radius: 6px;
-      padding: 4px 8px;
-      font-size: 0.8rem;
-      outline: none;
-    }
-
-    #bufferLoader {
-      position: absolute;
-      display: none;
-      flex-direction: column;
-      align-items: center;
-      gap: 12px;
-      z-index: 5;
-    }
-    .spinner {
-      width: 44px;
-      height: 44px;
-      border: 4px solid rgba(255, 255, 255, 0.15);
-      border-top-color: var(--vlc);
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    .seek-ripple {
-      position: absolute;
-      top: 0; bottom: 0; width: 35%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 1.3rem;
-      font-weight: 700;
-      color: rgba(255, 255, 255, 0.9);
-      background: rgba(255, 255, 255, 0.08);
-      pointer-events: none;
-      opacity: 0;
-      transition: opacity 0.2s;
-      z-index: 8;
-    }
-    #rippleLeft { left: 0; border-radius: 0 100px 100px 0; }
-    #rippleRight { right: 0; border-radius: 100px 0 0 100px; }
-    .ripple-active { opacity: 1 !important; }
   </style>
 </head>
 <body>
 
-<div id="selectModal">
-  <h2>VLC Stream Player</h2>
-  <p>Select your scrambled video `.zip`. Works with 5GB+ files while keeping RAM under 100MB.</p>
+  <div class="card" id="uiCard">
+    <h2 style="color:var(--vlc);">VLC Stream Player</h2>
+    <p style="font-size:0.8rem; color:#9ca3af;">Tap below to pick the scrambled .zip file.</p>
+    
+    <!-- Direct, unstyled native file picker -->
+    <input type="file" id="directPicker" />
 
-  <!-- High-compatibility transparent file click surface -->
-  <div class="btn-container">
-    <span class="fake-btn">Pick .ZIP File</span>
-    <input type="file" id="zipInput" accept=".zip,application/zip,application/x-zip-compressed,*/*" />
-  </div>
-</div>
-
-<div id="playerContainer">
-  <div id="bufferLoader">
-    <div class="spinner"></div>
-    <span id="loadStatus" style="font-size:0.85rem; color:#cbd5e1;">Mounting video stream...</span>
+    <div id="debugBox">Status: Waiting for file selection...</div>
   </div>
 
-  <video id="videoElement" playsinline preload="auto"></video>
-
-  <div class="seek-ripple" id="rippleLeft">-10s</div>
-  <div class="seek-ripple" id="rippleRight">+10s</div>
-
-  <div class="controls-overlay" id="controls">
-    <div class="top-bar">
-      <span class="title-text" id="videoTitle">Streaming</span>
-      <span class="ram-badge">RAM &lt; 50MB</span>
-      <button class="icon-btn" id="pipBtn" title="Picture in Picture">
-        <svg viewBox="0 0 24 24"><path d="M19 11h-8v6h8v-6zm4 8V4.98C23 3.88 22.1 3 21 3H3c-1.1 0-2 .88-2 1.98V19c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2zm-2 .02H3V4.97h18v14.05z"/></svg>
-      </button>
-    </div>
-
-    <div class="bottom-bar">
-      <input type="range" class="progress-slider" id="seekBar" value="0" min="0" max="100" step="0.05" />
-
-      <div class="btn-row">
-        <div class="left-btns">
-          <button class="icon-btn" id="playBtn">
-            <svg id="playIcon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-          </button>
-          <button class="icon-btn" id="rewindBtn" title="Back 10s">
-            <svg viewBox="0 0 24 24"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.22 3.16-1.98 5.12-1.98 3.75 0 6.88 2.57 7.75 6l2.44-.81C21.49 11.23 17.41 8 12.5 8z"/></svg>
-          </button>
-          <button class="icon-btn" id="forwardBtn" title="Forward 10s">
-            <svg viewBox="0 0 24 24"><path d="M11.5 8c2.65 0 5.05.99 6.9 2.6L22 7v9h-9l3.62-3.62c-1.39-1.22-3.16-1.98-5.12-1.98-3.75 0-6.88 2.57-7.75 6l-2.44-.81C2.51 11.23 6.59 8 11.5 8z"/></svg>
-          </button>
-          <span class="time-badge" id="timeDisplay">0:00:00 / 0:00:00</span>
-        </div>
-
-        <div class="right-btns">
-          <select class="speed-select" id="speedSelect">
-            <option value="0.5">0.5x</option>
-            <option value="1" selected>1.0x</option>
-            <option value="1.25">1.25x</option>
-            <option value="1.5">1.5x</option>
-            <option value="2">2.0x</option>
-          </select>
-          <button class="icon-btn" id="fsBtn" title="Fullscreen">
-            <svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
-          </button>
-        </div>
-      </div>
-    </div>
+  <div id="videoContainer">
+    <video id="player" controls playsinline></video>
   </div>
-</div>
 
 <script>
   const XOR_KEY = 0xAA;
-  const selectModal = document.getElementById('selectModal');
-  const zipInput = document.getElementById('zipInput');
-  const playerContainer = document.getElementById('playerContainer');
-  const video = document.getElementById('videoElement');
-  const controls = document.getElementById('controls');
-  const playBtn = document.getElementById('playBtn');
-  const playIcon = document.getElementById('playIcon');
-  const seekBar = document.getElementById('seekBar');
-  const timeDisplay = document.getElementById('timeDisplay');
-  const videoTitle = document.getElementById('videoTitle');
-  const speedSelect = document.getElementById('speedSelect');
-  const fsBtn = document.getElementById('fsBtn');
-  const pipBtn = document.getElementById('pipBtn');
-  const rewindBtn = document.getElementById('rewindBtn');
-  const forwardBtn = document.getElementById('forwardBtn');
-  const rippleLeft = document.getElementById('rippleLeft');
-  const rippleRight = document.getElementById('rippleRight');
-  const bufferLoader = document.getElementById('bufferLoader');
-  const loadStatus = document.getElementById('loadStatus');
+  const picker = document.getElementById('directPicker');
+  const debug = document.getElementById('debugBox');
+  const card = document.getElementById('uiCard');
+  const container = document.getElementById('videoContainer');
+  const player = document.getElementById('player');
 
-  let hideTimeout;
-
-  async function triggerLandscapeFullscreen() {
-    try {
-      if (playerContainer.requestFullscreen) {
-        await playerContainer.requestFullscreen();
-      } else if (playerContainer.webkitRequestFullscreen) {
-        await playerContainer.webkitRequestFullscreen();
-      }
-      if (screen.orientation && screen.orientation.lock) {
-        await screen.orientation.lock('landscape').catch(() => {});
-      }
-    } catch (ignore) {}
+  function log(msg) {
+    debug.innerText += "\n> " + msg;
+    debug.scrollTop = debug.scrollHeight;
   }
 
-  // Fast ZIP64 reader (reads tail bytes only)
-  async function parseUniversalZip(file) {
-    const tailSize = Math.min(file.size, 131072);
-    const tailBuf = await file.slice(file.size - tailSize, file.size).arrayBuffer();
-    const tailView = new DataView(tailBuf);
-    
-    let isZip64 = false;
-    let cdOffset = 0n;
-    let cdSize = 0n;
+  picker.addEventListener('change', async (e) => {
+    try {
+      const file = e.target.files && e.target.files[0];
+      if (!file) {
+        log("No file selected.");
+        return;
+      }
 
-    for (let i = tailBuf.byteLength - 20; i >= 0; i--) {
-      if (tailView.getUint32(i, true) === 0x07064b50) {
-        const zip64EOCDOffset = tailView.getBigUint64(i + 8, true);
-        isZip64 = true;
-        const z64Buf = await file.slice(Number(zip64EOCDOffset), Number(zip64EOCDOffset) + 56).arrayBuffer();
-        const z64View = new DataView(z64Buf);
-        if (z64View.getUint32(0, true) === 0x06064b50) {
+      log(`File picked: ${file.name} (${(file.size / (1024*1024)).toFixed(1)} MB)`);
+      log("Scanning ZIP End-of-Central-Directory...");
+
+      // 1. Locate EOCD or ZIP64
+      const tailSize = Math.min(file.size, 131072);
+      const tailBuf = await file.slice(file.size - tailSize, file.size).arrayBuffer();
+      const tailView = new DataView(tailBuf);
+      
+      let cdOffset = 0n;
+      let cdSize = 0n;
+      let isZip64 = false;
+
+      for (let i = tailBuf.byteLength - 20; i >= 0; i--) {
+        if (tailView.getUint32(i, true) === 0x07064b50) {
+          isZip64 = true;
+          const z64Offset = tailView.getBigUint64(i + 8, true);
+          const z64Buf = await file.slice(Number(z64Offset), Number(z64Offset) + 56).arrayBuffer();
+          const z64View = new DataView(z64Buf);
           cdSize = z64View.getBigUint64(40, true);
           cdOffset = z64View.getBigUint64(48, true);
-        }
-        break;
-      }
-    }
-
-    if (!isZip64) {
-      let eocdOffset = -1;
-      for (let i = tailBuf.byteLength - 22; i >= 0; i--) {
-        if (tailView.getUint32(i, true) === 0x06054b50) {
-          eocdOffset = file.size - tailSize + i;
           break;
         }
       }
-      if (eocdOffset === -1) throw new Error('Not a valid ZIP container');
-      const eocdSlice = await file.slice(eocdOffset, eocdOffset + 22).arrayBuffer();
-      const ev = new DataView(eocdSlice);
-      cdSize = BigInt(ev.getUint32(12, true));
-      cdOffset = BigInt(ev.getUint32(16, true));
-    }
 
-    const cdBuf = await file.slice(Number(cdOffset), Number(cdOffset + cdSize)).arrayBuffer();
-    const cdView = new DataView(cdBuf);
-    const files = {};
-    let ptr = 0;
-
-    while (ptr < cdBuf.byteLength) {
-      if (cdView.getUint32(ptr, true) !== 0x02014b50) break;
-      let size = BigInt(cdView.getUint32(ptr + 20, true));
-      const nameLen = cdView.getUint16(ptr + 28, true);
-      const extraLen = cdView.getUint16(ptr + 30, true);
-      const commentLen = cdView.getUint16(ptr + 32, true);
-      let localOffset = BigInt(cdView.getUint32(ptr + 42, true));
-
-      const nameBytes = new Uint8Array(cdBuf, ptr + 46, nameLen);
-      const name = new TextDecoder().decode(nameBytes);
-
-      if (localOffset === 0xFFFFFFFFn && extraLen > 0) {
-        let ePtr = ptr + 46 + nameLen;
-        while (ePtr < ptr + 46 + nameLen + extraLen) {
-          const headerId = cdView.getUint16(ePtr, true);
-          const dataSize = cdView.getUint16(ePtr + 2, true);
-          if (headerId === 0x0001) {
-            localOffset = cdView.getBigUint64(ePtr + 4, true);
+      if (!isZip64) {
+        let eocd = -1;
+        for (let i = tailBuf.byteLength - 22; i >= 0; i--) {
+          if (tailView.getUint32(i, true) === 0x06054b50) {
+            eocd = file.size - tailSize + i;
             break;
           }
-          ePtr += 4 + dataSize;
         }
+        if (eocd === -1) throw new Error("File is not a valid ZIP archive.");
+        const eocdSlice = await file.slice(eocd, eocd + 22).arrayBuffer();
+        const ev = new DataView(eocdSlice);
+        cdSize = BigInt(ev.getUint32(12, true));
+        cdOffset = BigInt(ev.getUint32(16, true));
       }
 
-      files[name] = { size: Number(size), localOffset: Number(localOffset), nameLen };
-      ptr += 46 + nameLen + extraLen + commentLen;
-    }
-    return files;
-  }
+      log(`Found Directory: Offset ${cdOffset}, Size ${cdSize} bytes`);
 
-  // Handle File Selection
-  zipInput.addEventListener('change', async (e) => {
-    const file = e.target.files && e.target.files[0];
-    if (!file) return;
+      // 2. Read Central Directory
+      const cdBuf = await file.slice(Number(cdOffset), Number(cdOffset + cdSize)).arrayBuffer();
+      const cdView = new DataView(cdBuf);
+      const files = {};
+      let ptr = 0;
 
-    selectModal.style.display = 'none';
-    bufferLoader.style.display = 'flex';
-    await triggerLandscapeFullscreen();
+      while (ptr < cdBuf.byteLength) {
+        if (cdView.getUint32(ptr, true) !== 0x02014b50) break;
+        let size = BigInt(cdView.getUint32(ptr + 20, true));
+        const nameLen = cdView.getUint16(ptr + 28, true);
+        const extraLen = cdView.getUint16(ptr + 30, true);
+        const commentLen = cdView.getUint16(ptr + 32, true);
+        let localOffset = BigInt(cdView.getUint32(ptr + 42, true));
 
-    try {
-      const dir = await parseUniversalZip(file);
-      if (!dir['manifest.json']) throw new Error('manifest.json missing');
+        const nameBytes = new Uint8Array(cdBuf, ptr + 46, nameLen);
+        const name = new TextDecoder().decode(nameBytes);
 
-      const mEntry = dir['manifest.json'];
-      const mDataOffset = mEntry.localOffset + 30 + mEntry.nameLen;
-      const mBuf = await file.slice(mDataOffset, mDataOffset + mEntry.size).arrayBuffer();
+        if (localOffset === 0xFFFFFFFFn && extraLen > 0) {
+          let ePtr = ptr + 46 + nameLen;
+          while (ePtr < ptr + 46 + nameLen + extraLen) {
+            if (cdView.getUint16(ePtr, true) === 0x0001) {
+              localOffset = cdView.getBigUint64(ePtr + 4, true);
+              break;
+            }
+            ePtr += 4 + cdView.getUint16(ePtr + 2, true);
+          }
+        }
+
+        files[name] = { size: Number(size), localOffset: Number(localOffset), nameLen };
+        ptr += 46 + nameLen + extraLen + commentLen;
+      }
+
+      if (!files['manifest.json']) throw new Error("manifest.json missing inside ZIP.");
+      log("Found manifest.json! Parsing video details...");
+
+      // 3. Read Manifest
+      const m = files['manifest.json'];
+      const mBuf = await file.slice(m.localOffset + 30 + m.nameLen, m.localOffset + 30 + m.nameLen + m.size).arrayBuffer();
       const manifest = JSON.parse(new TextDecoder().decode(mBuf));
-      videoTitle.innerText = manifest.name;
 
-      const totalChunks = manifest.chunks.length;
-      loadStatus.innerText = 'Initializing stream...';
+      log(`Ready to play: ${manifest.name} (${manifest.chunks.length} chunks)`);
 
-      // ZERO-RAM HYBRID BLOB:
-      // De-scramble the first 5MB so metadata and initial frames load instantly
-      const headerChunkCount = Math.min(5, totalChunks);
-      const blobParts = [];
+      // 4. Extract first 15MB to launch playback immediately
+      log("Extracting startup chunks...");
+      const startupCount = Math.min(15, manifest.chunks.length);
+      const chunks = [];
 
-      for (let i = 0; i < headerChunkCount; i++) {
+      for (let i = 0; i < startupCount; i++) {
         const cName = manifest.chunks[i];
-        const cEntry = dir[cName];
-        const dataOffset = cEntry.localOffset + 30 + cEntry.nameLen;
-        const cBuf = await file.slice(dataOffset, dataOffset + cEntry.size).arrayBuffer();
-        const u8 = new Uint8Array(cBuf);
+        const entry = files[cName];
+        const raw = await file.slice(entry.localOffset + 30 + entry.nameLen, entry.localOffset + 30 + entry.nameLen + entry.size).arrayBuffer();
+        const u8 = new Uint8Array(raw);
         for (let b = 0; b < u8.length; b++) u8[b] ^= XOR_KEY;
-        blobParts.push(u8);
+        chunks.push(u8);
       }
 
-      // Process the rest in 30MB micro-batches to prevent memory accumulation
-      const BATCH = 30;
-      for (let i = headerChunkCount; i < totalChunks; i += BATCH) {
-        const batchEnd = Math.min(i + BATCH, totalChunks);
-        const batchParts = [];
+      log("Mounting video player...");
+      const blob = new Blob(chunks, { type: manifest.mime });
+      player.src = URL.createObjectURL(blob);
+      
+      card.style.display = 'none';
+      container.style.display = 'block';
 
-        for (let j = i; j < batchEnd; j++) {
-          const cName = manifest.chunks[j];
-          const cEntry = dir[cName];
-          const dataOffset = cEntry.localOffset + 30 + cEntry.nameLen;
-          const cBuf = await file.slice(dataOffset, dataOffset + cEntry.size).arrayBuffer();
-          const u8 = new Uint8Array(cBuf);
-          for (let b = 0; b < u8.length; b++) u8[b] ^= XOR_KEY;
-          batchParts.push(u8);
-        }
+      if (container.requestFullscreen) container.requestFullscreen().catch(() => {});
+      if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {});
 
-        // Fold batch into virtual storage slice
-        blobParts.push(new Blob(batchParts));
-        batchParts.length = 0;
-
-        if (i % 120 === 0) {
-          loadStatus.innerText = `Preparing stream: ${Math.round((i / totalChunks) * 100)}%`;
-          await new Promise(r => setTimeout(r, 0)); // Flush GC
-        }
-      }
-
-      const finalBlob = new Blob(blobParts, { type: manifest.mime });
-      video.src = URL.createObjectURL(finalBlob);
-
-      video.onloadedmetadata = () => {
-        bufferLoader.style.display = 'none';
-        video.play().catch(() => {});
-        resetControlsTimer();
-      };
+      player.play();
 
     } catch (err) {
-      alert('Error opening video: ' + err.message);
-      bufferLoader.style.display = 'none';
-      selectModal.style.display = 'flex';
-      zipInput.value = '';
+      log("ERROR: " + err.message);
+      console.error(err);
     }
   });
-
-  // UI Handlers
-  function updatePlayState() {
-    if (video.paused) playIcon.innerHTML = '<path d="M8 5v14l11-7z"/>';
-    else playIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>';
-  }
-
-  function togglePlay() {
-    if (video.paused) video.play();
-    else video.pause();
-    updatePlayState();
-    resetControlsTimer();
-  }
-  playBtn.onclick = togglePlay;
-  video.onclick = togglePlay;
-  video.onplay = updatePlayState;
-  video.onpause = updatePlayState;
-
-  video.ontimeupdate = () => {
-    if (!video.duration) return;
-    seekBar.value = (video.currentTime / video.duration) * 100;
-    timeDisplay.innerText = `${fmt(video.currentTime)} / ${fmt(video.duration)}`;
-  };
-
-  seekBar.oninput = () => {
-    video.currentTime = (seekBar.value / 100) * video.duration;
-  };
-
-  function seekRelative(sec) {
-    video.currentTime = Math.max(0, Math.min(video.currentTime + sec, video.duration || 0));
-    const ripple = sec < 0 ? rippleLeft : rippleRight;
-    ripple.classList.add('ripple-active');
-    setTimeout(() => ripple.classList.remove('ripple-active'), 350);
-    resetControlsTimer();
-  }
-
-  rewindBtn.onclick = () => seekRelative(-10);
-  forwardBtn.onclick = () => seekRelative(10);
-
-  playerContainer.ondblclick = (e) => {
-    const rect = playerContainer.getBoundingClientRect();
-    if ((e.clientX - rect.left) < rect.width / 2) seekRelative(-10);
-    else seekRelative(10);
-  };
-
-  speedSelect.onchange = () => video.playbackRate = parseFloat(speedSelect.value);
-
-  pipBtn.onclick = async () => {
-    try {
-      if (document.pictureInPictureElement) await document.exitPictureInPicture();
-      else if (video.requestPictureInPicture) await video.requestPictureInPicture();
-    } catch (e) {
-      alert('PiP unavailable');
-    }
-  };
-
-  fsBtn.onclick = () => triggerLandscapeFullscreen();
-
-  function resetControlsTimer() {
-    controls.classList.add('active');
-    clearTimeout(hideTimeout);
-    if (!video.paused) {
-      hideTimeout = setTimeout(() => controls.classList.remove('active'), 2500);
-    }
-  }
-
-  playerContainer.onmousemove = resetControlsTimer;
-  playerContainer.ontouchstart = resetControlsTimer;
-
-  function fmt(s) {
-    const hrs = Math.floor(s / 3600);
-    const min = Math.floor((s % 3600) / 60);
-    const sec = Math.floor(s % 60);
-    if (hrs > 0) return `${hrs}:${min < 10 ? '0' : ''}${min}:${sec < 10 ? '0' : ''}${sec}`;
-    return `${min}:${sec < 10 ? '0' : ''}${sec}`;
-  }
 </script>
 </body>
 </html>
