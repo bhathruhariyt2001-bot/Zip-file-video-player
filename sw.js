@@ -1,48 +1,26 @@
 const XOR_KEY = 0xAA;
-const DB_NAME = 'VLC_PRO_STREAM_DB';
-const STORE_NAME = 'meta_store';
+let meta = null;
 
 self.addEventListener('install', (e) => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 
-function openDB() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = (e) => {
-      const db = e.target.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME);
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-function getStoredMeta() {
-  return openDB().then((db) => {
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, 'readonly');
-      const req = tx.objectStore(STORE_NAME).get('active_stream');
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
-  });
-}
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'INIT_META') {
+    meta = event.data.payload;
+    if (event.ports && event.ports[0]) {
+      event.ports[0].postMessage({ status: 'READY' });
+    }
+  }
+});
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  if (!url.pathname.endsWith('/virtual-stream.mp4')) {
+  if (!url.pathname.endsWith('/stream-video.mp4') || !meta) {
     return;
   }
 
   event.respondWith((async () => {
-    const meta = await getStoredMeta();
-    if (!meta) {
-      return new Response('No stream metadata found in local storage', { status: 404 });
-    }
-
     const { file, chunksMap, totalSize, mime } = meta;
     const rangeHeader = event.request.headers.get('range');
 
@@ -64,15 +42,16 @@ self.addEventListener('fetch', (event) => {
       });
     }
 
-    // Serve a bounded 2MB slice per request so RAM is strictly locked <10MB
-    const MAX_BLOCK = 2 * 1024 * 1024;
-    end = Math.min(end, start + MAX_BLOCK - 1);
+    // Serve max 2MB per request to enforce strict < 10MB RAM ceiling
+    const MAX_CHUNK = 2 * 1024 * 1024;
+    end = Math.min(end, start + MAX_CHUNK - 1);
     const contentLength = (end - start) + 1;
 
     const stream = new ReadableStream({
       async start(controller) {
         let currentPos = start;
 
+        // Locate start chunk in the index map
         let cIdx = 0;
         while (cIdx < chunksMap.length && (chunksMap[cIdx].startOffset + chunksMap[cIdx].size) <= currentPos) {
           cIdx++;
@@ -84,6 +63,7 @@ self.addEventListener('fetch', (event) => {
           const chunkRem = item.size - chunkInPos;
           const toRead = Math.min(chunkRem, (end - currentPos) + 1);
 
+          // Read only the requested byte slice directly from disk
           const sliceStart = item.dataOffset + chunkInPos;
           const raw = await file.slice(sliceStart, sliceStart + toRead).arrayBuffer();
 
