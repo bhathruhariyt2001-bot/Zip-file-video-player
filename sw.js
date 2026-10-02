@@ -1,5 +1,5 @@
 const XOR_KEY = 0xAA;
-let activeArchive = null;
+let streamArchive = null;
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();
@@ -10,29 +10,23 @@ self.addEventListener('activate', (e) => {
 });
 
 self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'INIT_ARCHIVE') {
-    activeArchive = event.data.payload;
+  if (event.data && event.data.type === 'ATTACH_ARCHIVE') {
+    streamArchive = event.data.payload;
     if (event.ports && event.ports[0]) {
-      event.ports[0].postMessage({ status: 'READY' });
+      event.ports[0].postMessage({ ready: true });
     }
   }
 });
 
-async function getFileDataOffset(file, localOffset) {
-  const hdrBuf = await file.slice(localOffset, localOffset + 30).arrayBuffer();
-  const v = new DataView(hdrBuf);
-  return localOffset + 30 + v.getUint16(26, true) + v.getUint16(28, true);
-}
-
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   
-  if (!url.pathname.endsWith('/stream-virtual-video.mp4') || !activeArchive) {
+  if (!url.pathname.endsWith('/virtual-stream-track.mp4') || !streamArchive) {
     return;
   }
 
   event.respondWith((async () => {
-    const { file, chunksMap, totalSize, mime } = activeArchive;
+    const { file, chunksMap, totalSize, mime } = streamArchive;
     const rangeHeader = event.request.headers.get('range');
 
     let start = 0;
@@ -53,9 +47,10 @@ self.addEventListener('fetch', (event) => {
       });
     }
 
-    const requestedLength = (end - start) + 1;
+    const chunkTargetBytes = Math.min(1024 * 1024 * 4, (end - start) + 1); // 4MB buffer chunks
+    end = Math.min(end, start + chunkTargetBytes - 1);
+    const contentLen = (end - start) + 1;
 
-    // ReadableStream streams slices on demand as the video player requests them
     const stream = new ReadableStream({
       async start(controller) {
         let currentPos = start;
@@ -71,8 +66,7 @@ self.addEventListener('fetch', (event) => {
           const chunkRem = item.size - chunkInPos;
           const toRead = Math.min(chunkRem, (end - currentPos) + 1);
 
-          const payloadBase = await getFileDataOffset(file, item.localOffset);
-          const sliceStart = payloadBase + chunkInPos;
+          const sliceStart = item.dataOffset + chunkInPos;
           const raw = await file.slice(sliceStart, sliceStart + toRead).arrayBuffer();
 
           const u8 = new Uint8Array(raw);
@@ -94,10 +88,9 @@ self.addEventListener('fetch', (event) => {
       headers: {
         'Content-Type': mime || 'video/mp4',
         'Content-Range': `bytes ${start}-${end}/${totalSize}`,
-        'Content-Length': requestedLength.toString(),
+        'Content-Length': contentLen.toString(),
         'Accept-Ranges': 'bytes'
       }
     });
   })());
 });
-          
