@@ -81,106 +81,6 @@ layout: null
     <video id="player" controls playsinline></video>
   </div>
 
-<!-- Embedded Service Worker Script -->
-<script id="sw-script" type="text/plain">
-const XOR_KEY = 0xAA;
-let activeArchive = null;
-
-self.addEventListener('install', (e) => self.skipWaiting());
-self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
-
-self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'INIT_ARCHIVE') {
-    activeArchive = event.data.payload;
-    if (event.ports && event.ports[0]) {
-      event.ports[0].postMessage({ status: 'READY' });
-    }
-  }
-});
-
-async function getFileDataOffset(file, localOffset) {
-  const hdrBuf = await file.slice(localOffset, localOffset + 30).arrayBuffer();
-  const v = new DataView(hdrBuf);
-  return localOffset + 30 + v.getUint16(26, true) + v.getUint16(28, true);
-}
-
-self.addEventListener('fetch', (event) => {
-  const url = new URL(event.request.url);
-  if (!url.pathname.endsWith('/stream-virtual-video.mp4') || !activeArchive) {
-    return;
-  }
-
-  event.respondWith((async () => {
-    const { file, chunksMap, totalSize, mime } = activeArchive;
-    const rangeHeader = event.request.headers.get('range');
-
-    let start = 0;
-    let end = totalSize - 1;
-
-    if (rangeHeader) {
-      const match = rangeHeader.match(/bytes=(\d+)-(\d*)/);
-      if (match) {
-        start = parseInt(match[1], 10);
-        if (match[2]) end = parseInt(match[2], 10);
-      }
-    }
-
-    if (start >= totalSize || end >= totalSize) {
-      return new Response(null, {
-        status: 416,
-        headers: { 'Content-Range': `bytes */${totalSize}` }
-      });
-    }
-
-    const requestedLength = (end - start) + 1;
-
-    // Stream on-demand chunks directly through Range requests
-    const stream = new ReadableStream({
-      async start(controller) {
-        let currentPos = start;
-
-        let cIdx = 0;
-        while (cIdx < chunksMap.length && (chunksMap[cIdx].startOffset + chunksMap[cIdx].size) <= currentPos) {
-          cIdx++;
-        }
-
-        while (currentPos <= end && cIdx < chunksMap.length) {
-          const item = chunksMap[cIdx];
-          const chunkInPos = currentPos - item.startOffset;
-          const chunkRem = item.size - chunkInPos;
-          const toRead = Math.min(chunkRem, (end - currentPos) + 1);
-
-          const payloadBase = await getFileDataOffset(file, item.localOffset);
-          const sliceStart = payloadBase + chunkInPos;
-          const raw = await file.slice(sliceStart, sliceStart + toRead).arrayBuffer();
-
-          const u8 = new Uint8Array(raw);
-          for (let b = 0; b < u8.length; b++) {
-            u8[b] ^= XOR_KEY;
-          }
-
-          controller.enqueue(u8);
-          currentPos += toRead;
-          cIdx++;
-        }
-
-        controller.close();
-      }
-    });
-
-    return new Response(stream, {
-      status: 206,
-      headers: {
-        'Content-Type': mime || 'video/mp4',
-        'Content-Range': `bytes ${start}-${end}/${totalSize}`,
-        'Content-Length': requestedLength.toString(),
-        'Accept-Ranges': 'bytes'
-      }
-    });
-  })());
-});
-</script>
-
 <script>
   const picker = document.getElementById('directPicker');
   const debug = document.getElementById('debugBox');
@@ -193,22 +93,16 @@ self.addEventListener('fetch', (event) => {
     debug.scrollTop = debug.scrollHeight;
   }
 
-  // Self-register service worker on GitHub Pages
-  let swReady = false;
+  // Register real sw.js relative to repository directory
   async function initWorker() {
     if (!('serviceWorker' in navigator)) {
       log("Error: Service Workers not supported in this browser.");
       return;
     }
     try {
-      const swCode = document.getElementById('sw-script').textContent;
-      const swBlob = new Blob([swCode], { type: 'application/javascript' });
-      const swUrl = URL.createObjectURL(swBlob);
-      
-      const reg = await navigator.serviceWorker.register(swUrl, { scope: './' });
+      await navigator.serviceWorker.register('./sw.js', { scope: './' });
       await navigator.serviceWorker.ready;
-      swReady = true;
-      log("Ready: Worker loaded successfully on GitHub.");
+      log("Ready: Worker registered successfully.");
     } catch (err) {
       log("Worker Init Error: " + err.message);
     }
@@ -302,7 +196,7 @@ self.addEventListener('fetch', (event) => {
       const mBuf = await file.slice(mOffset, mOffset + mEntry.size).arrayBuffer();
       const manifest = JSON.parse(new TextDecoder().decode(mBuf));
 
-      // Build chunk index map
+      // Build chunk map
       let runningOffset = 0;
       const chunksMap = [];
       for (const name of manifest.chunks) {
@@ -315,12 +209,14 @@ self.addEventListener('fetch', (event) => {
         runningOffset += item.size;
       }
 
-      log(`Found ${manifest.chunks.length} chunks (${(runningOffset / (1024*1024)).toFixed(1)} MB total).`);
-      log("Connecting virtual HTTP pipeline...");
+      log(`Ready: ${manifest.chunks.length} chunks mapped (${(runningOffset / (1024*1024)).toFixed(1)} MB).`);
+      log("Handshaking with stream worker...");
+
+      // Ensure service worker is active
+      const reg = await navigator.serviceWorker.ready;
+      const swTarget = navigator.serviceWorker.controller || reg.active;
 
       const channel = new MessageChannel();
-      const swTarget = navigator.serviceWorker.controller || (await navigator.serviceWorker.ready).active;
-
       swTarget.postMessage({
         type: 'INIT_ARCHIVE',
         payload: {
@@ -332,13 +228,13 @@ self.addEventListener('fetch', (event) => {
       }, [channel.port2]);
 
       channel.port1.onmessage = () => {
-        // Points to the virtual route inside the current GitHub Pages directory
+        log("Stream connected! Starting playback...");
         player.src = `./stream-virtual-video.mp4?v=${Date.now()}`;
         card.style.display = 'none';
         container.style.display = 'block';
 
         if (container.requestFullscreen) container.requestFullscreen().catch(() => {});
-        player.play().catch(e => log("Autoplay blocked, tap to play."));
+        player.play().catch(() => log("Autoplay blocked, tap the screen to play."));
       };
 
     } catch (err) {
