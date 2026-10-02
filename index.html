@@ -6,7 +6,7 @@ layout: null
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>VLC 30MB Buffer Streamer</title>
+  <title>VLC Stream Player</title>
   <style>
     :root { 
       --vlc: #ff8800; 
@@ -233,15 +233,15 @@ layout: null
 <body>
 
   <div class="card" id="uiCard">
-    <h2 style="color:var(--vlc);">VLC 30MB Buffer Streamer</h2>
-    <p style="font-size:0.8rem; color:#9ca3af;">Tap below to pick the .zip archive (up to 10GB+)</p>
+    <h2 style="color:var(--vlc);">VLC Stream Engine</h2>
+    <p style="font-size:0.8rem; color:#9ca3af;">Select .zip archive to stream without loading into RAM</p>
     
     <input 
       type="file" 
       id="directPicker" 
       accept=".zip,application/zip,application/x-zip-compressed,multipart/x-zip,*/*"
     />
-    <div id="debugBox">Ready. Choose your zip archive...</div>
+    <div id="debugBox">Connecting Stream Engine...</div>
   </div>
 
   <div id="videoContainer">
@@ -302,7 +302,6 @@ layout: null
   </div>
 
 <script>
-  const XOR_KEY = 0xAA;
   const picker = document.getElementById('directPicker');
   const debug = document.getElementById('debugBox');
   const card = document.getElementById('uiCard');
@@ -332,22 +331,30 @@ layout: null
     debug.scrollTop = debug.scrollHeight;
   }
 
-  function getSupportedMime(preferred) {
-    const candidates = [
-      preferred,
-      'video/mp4; codecs="avc1.42E01E, mp4a.40.2"',
-      'video/mp4; codecs="avc1.640028, mp4a.40.2"',
-      'video/mp4; codecs="avc1.4d401f, mp4a.40.2"',
-      'video/mp4; codecs="avc1.42001e"',
-      'video/webm; codecs="vp8, vorbis"',
-      'video/webm; codecs="vp9, opus"'
-    ].filter(Boolean);
-
-    for (const c of candidates) {
-      if (MediaSource.isTypeSupported(c)) return c;
+  // Register worker and wait until it actively controls the page
+  let swReady = false;
+  async function setupServiceWorker() {
+    if (!('serviceWorker' in navigator)) {
+      log("Error: Service Workers not supported.");
+      return;
     }
-    return null;
+    try {
+      await navigator.serviceWorker.register('./sw.js', { scope: './' });
+      await navigator.serviceWorker.ready;
+      
+      if (!navigator.serviceWorker.controller) {
+        // If not controlled yet, reload page once so the worker claims it
+        log("Activating engine, reloading page...");
+        window.location.reload();
+        return;
+      }
+      swReady = true;
+      log("Engine ready. Choose your file.");
+    } catch (err) {
+      log("SW Setup Error: " + err.message);
+    }
   }
+  setupServiceWorker();
 
   async function getFileDataOffset(file, localOffset) {
     const hdrBuf = await file.slice(localOffset, localOffset + 30).arrayBuffer();
@@ -355,16 +362,14 @@ layout: null
     return localOffset + 30 + v.getUint16(26, true) + v.getUint16(28, true);
   }
 
-  // Clear previous selection value so repeated selection works on mobile
   picker.addEventListener('click', () => {
     picker.value = '';
   });
 
-  // Handle file selection using both 'change' and 'input' for Android Chrome
-  async function processSelectedFile(file) {
+  async function processFile(file) {
     try {
-      log(`File: ${file.name} (${(file.size / (1024*1024)).toFixed(1)} MB)`);
-      log("Reading archive index...");
+      log(`Selected: ${file.name} (${(file.size / (1024*1024)).toFixed(1)} MB)`);
+      log("Indexing ZIP entries...");
 
       const tailSize = Math.min(file.size, 131072);
       const tailBuf = await file.slice(file.size - tailSize, file.size).arrayBuffer();
@@ -437,96 +442,50 @@ layout: null
       const mBuf = await file.slice(mOffset, mOffset + mEntry.size).arrayBuffer();
       const manifest = JSON.parse(new TextDecoder().decode(mBuf));
 
-      log(`Found: ${manifest.chunks.length} chunks`);
+      log(`Found manifest: ${manifest.chunks.length} chunks. Precomputing offsets...`);
 
-      const targetMime = getSupportedMime(manifest.mime);
-      if (!targetMime) throw new Error("No compatible media container detected.");
-      log(`Stream Engine MIME: ${targetMime}`);
+      // Precalculate every chunk's direct data offset
+      let runningOffset = 0;
+      const chunksMap = [];
+      for (const name of manifest.chunks) {
+        const item = files[name];
+        const directOffset = await getFileDataOffset(file, item.localOffset);
+        chunksMap.push({
+          dataOffset: directOffset,
+          size: item.size,
+          startOffset: runningOffset
+        });
+        runningOffset += item.size;
+      }
 
-      const ms = new MediaSource();
-      player.src = URL.createObjectURL(ms);
+      log(`Connecting ${(runningOffset / (1024*1024)).toFixed(1)} MB stream pipeline...`);
 
-      ms.addEventListener('sourceopen', () => {
-        const sb = ms.addSourceBuffer(targetMime);
-        sb.mode = 'sequence';
+      const channel = new MessageChannel();
+      const sw = navigator.serviceWorker.controller;
+      if (!sw) throw new Error("Service Worker not active. Try reloading once.");
 
-        let chunkIndex = 0;
-        let isWorking = false;
-        const BUFFER_TARGET_SECS = 25;
-        const PURGE_BEHIND_SECS = 15;
-
-        async function pumpStream() {
-          if (ms.readyState !== 'open' || sb.updating || isWorking) return;
-
-          const curTime = player.currentTime;
-          if (curTime > PURGE_BEHIND_SECS && sb.buffered.length > 0) {
-            if (sb.buffered.start(0) < curTime - PURGE_BEHIND_SECS) {
-              try {
-                isWorking = true;
-                sb.remove(0, curTime - PURGE_BEHIND_SECS);
-                return;
-              } catch (_) {}
-              finally { isWorking = false; }
-            }
-          }
-
-          if (chunkIndex >= manifest.chunks.length) {
-            if (!sb.updating && ms.readyState === 'open') {
-              try { ms.endOfStream(); } catch (_) {}
-            }
-            return;
-          }
-
-          let forwardBuffer = 0;
-          for (let i = 0; i < sb.buffered.length; i++) {
-            if (sb.buffered.start(i) <= curTime && curTime <= sb.buffered.end(i)) {
-              forwardBuffer = sb.buffered.end(i) - curTime;
-              break;
-            }
-          }
-
-          if (chunkIndex > 2 && forwardBuffer > BUFFER_TARGET_SECS) {
-            return;
-          }
-
-          try {
-            isWorking = true;
-            const cName = manifest.chunks[chunkIndex];
-            const entry = files[cName];
-            const offset = await getFileDataOffset(file, entry.localOffset);
-            const raw = await file.slice(offset, offset + entry.size).arrayBuffer();
-            
-            const u8 = new Uint8Array(raw);
-            for (let b = 0; b < u8.length; b++) u8[b] ^= XOR_KEY;
-
-            chunkIndex++;
-            sb.appendBuffer(u8);
-          } catch (err) {
-            log(`Stream read error: ${err.message}`);
-          } finally {
-            isWorking = false;
-          }
+      sw.postMessage({
+        type: 'ATTACH_ARCHIVE',
+        payload: {
+          file,
+          chunksMap,
+          totalSize: runningOffset,
+          mime: manifest.mime || 'video/mp4'
         }
+      }, [channel.port2]);
 
-        sb.addEventListener('updateend', pumpStream);
-        player.addEventListener('timeupdate', pumpStream);
-        player.addEventListener('waiting', pumpStream);
+      channel.port1.onmessage = () => {
+        player.src = `./virtual-stream-track.mp4?v=${Date.now()}`;
+        titleDisplay.innerText = manifest.name || file.name;
+        card.style.display = 'none';
+        container.style.display = 'block';
 
-        pumpStream();
-      });
-
-      titleDisplay.innerText = manifest.name || file.name;
-      card.style.display = 'none';
-      container.style.display = 'block';
-
-      try {
-        if (container.requestFullscreen) await container.requestFullscreen();
-        else if (container.webkitRequestFullscreen) await container.webkitRequestFullscreen();
+        if (container.requestFullscreen) container.requestFullscreen().catch(() => {});
         if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {});
-      } catch (_) {}
 
-      player.play().catch(() => log("Autoplay blocked, tap screen to play."));
-      showOverlay();
+        player.play().catch(() => log("Autoplay blocked, tap play."));
+        showOverlay();
+      };
 
     } catch (err) {
       log("ERROR: " + err.message);
@@ -534,14 +493,14 @@ layout: null
     }
   }
 
-  let handlingFile = false;
-  ['change', 'input'].forEach(evtName => {
-    picker.addEventListener(evtName, async (e) => {
+  let fileBusy = false;
+  ['change', 'input'].forEach(evt => {
+    picker.addEventListener(evt, async (e) => {
       const file = e.target.files && e.target.files[0];
-      if (!file || handlingFile) return;
-      handlingFile = true;
-      await processSelectedFile(file);
-      handlingFile = false;
+      if (!file || fileBusy) return;
+      fileBusy = true;
+      await processFile(file);
+      fileBusy = false;
     });
   });
 
@@ -629,4 +588,40 @@ layout: null
 
     const cur = Date.now();
     const tapLen = cur - lastTapTime;
-    const clickX = e.clie
+    const clickX = e.clientX;
+    const w = window.innerWidth;
+
+    if (tapLen < 300 && tapLen > 0) {
+      clearTimeout(tapTimer);
+      if (clickX < w * 0.4) {
+        seekOffset(-10);
+        skipLeftFeedback.classList.add('show');
+        setTimeout(() => skipLeftFeedback.classList.remove('show'), 500);
+      } else if (clickX > w * 0.6) {
+        seekOffset(10);
+        skipRightFeedback.classList.add('show');
+        setTimeout(() => skipRightFeedback.classList.remove('show'), 500);
+      } else {
+        togglePlay();
+      }
+    } else {
+      tapTimer = setTimeout(toggleOverlay, 300);
+    }
+    lastTapTime = cur;
+  });
+
+  muteBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    player.muted = !player.muted;
+    const mutePath = "M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z";
+    const unmutePath = "M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z";
+    volIcon.querySelector('path').setAttribute('d', player.muted ? mutePath : unmutePath);
+  });
+
+  speedPicker.addEventListener('change', (e) => {
+    e.stopPropagation();
+    player.playbackRate = parseFloat(speedPicker.value);
+    showOverlay();
+  });
+
+  fsBtn.addEventListe
