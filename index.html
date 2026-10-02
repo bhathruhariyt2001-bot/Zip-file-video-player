@@ -6,10 +6,17 @@ layout: null
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Jbh Instant Stream Player</title>
+  <title>VLC 3-Chunk Stream Player</title>
   <style>
-    :root { --vlc: #ff8800; --bg: #000; }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root { 
+      --vlc: #ff8800; 
+      --bg: #000; 
+    }
+    * { 
+      box-sizing: border-box; 
+      margin: 0; 
+      padding: 0; 
+    }
     body {
       background: var(--bg);
       color: #fff;
@@ -23,7 +30,10 @@ layout: null
       user-select: none;
       -webkit-user-select: none;
     }
-    input, select, button { user-select: auto; -webkit-user-select: auto; }
+    input, select, button { 
+      user-select: auto; 
+      -webkit-user-select: auto; 
+    }
 
     .card {
       background: #111827;
@@ -58,7 +68,7 @@ layout: null
       font-family: monospace;
       font-size: 0.75rem;
       color: #38bdf8;
-      max-height: 140px;
+      max-height: 150px;
       overflow-y: auto;
       white-space: pre-wrap;
       word-break: break-all;
@@ -73,7 +83,11 @@ layout: null
       z-index: 9999;
       overflow: hidden;
     }
-    video { width: 100%; height: 100%; object-fit: contain; }
+    video { 
+      width: 100%; 
+      height: 100%; 
+      object-fit: contain; 
+    }
     .video-overlay {
       position: absolute;
       inset: 0;
@@ -84,11 +98,21 @@ layout: null
       opacity: 1;
       transition: opacity 0.3s ease;
     }
-    .video-overlay.hidden { opacity: 0; pointer-events: none; }
-    .top-bar { display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; font-size: 0.95rem; }
+    .video-overlay.hidden { 
+      opacity: 0; 
+      pointer-events: none; 
+    }
+    .top-bar { 
+      display: flex; 
+      justify-content: space-between; 
+      align-items: center; 
+      padding: 16px 20px; 
+      font-size: 0.95rem; 
+    }
     .center-controls {
       position: absolute;
-      top: 50%; left: 50%;
+      top: 50%; 
+      left: 50%;
       transform: translate(-50%, -50%);
       display: flex;
       align-items: center;
@@ -98,46 +122,126 @@ layout: null
       background: rgba(0, 0, 0, 0.4);
       border: none;
       color: #fff;
-      width: 56px; height: 56px;
+      width: 56px; 
+      height: 56px;
       border-radius: 50%;
-      display: flex; align-items: center; justify-content: center;
+      display: flex; 
+      align-items: center; 
+      justify-content: center;
       cursor: pointer;
     }
-    .center-btn svg { width: 28px; height: 28px; fill: #fff; }
-    .tap-indicator {
-      position: absolute; top: 0; bottom: 0; width: 40%;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 0.85rem; color: #fff;
-      background: rgba(255, 255, 255, 0.1);
-      opacity: 0; pointer-events: none; transition: opacity 0.2s ease;
+    .center-btn svg { 
+      width: 28px; 
+      height: 28px; 
+      fill: #fff; 
     }
-    .tap-indicator.left { left: 0; border-radius: 0 100px 100px 0; }
-    .tap-indicator.right { right: 0; border-radius: 100px 0 0 100px; }
-    .tap-indicator.show { opacity: 1; }
-    .bottom-bar { padding: 10px 16px; display: flex; flex-direction: column; gap: 8px; }
-    .progress-bar-container { position: relative; height: 20px; display: flex; align-items: center; cursor: pointer; }
-    .seek-slider { -webkit-appearance: none; width: 100%; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.3); outline: none; }
-    .seek-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--vlc); cursor: pointer; }
-    .controls-row { display: flex; align-items: center; justify-content: space-between; font-size: 0.85rem; }
-    .controls-left, .controls-right { display: flex; align-items: center; gap: 14px; }
-    .icon-btn { background: none; border: none; color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 6px; }
-    .icon-btn svg { width: 22px; height: 22px; fill: #fff; }
-    select.speed-select { background: rgba(255,255,255,0.15); border: none; color: #fff; padding: 4px 6px; border-radius: 4px; font-size: 0.8rem; }
-    select.speed-select option { background: #111; color: #fff; }
+    .tap-indicator {
+      position: absolute; 
+      top: 0; 
+      bottom: 0; 
+      width: 40%;
+      display: flex; 
+      align-items: center; 
+      justify-content: center;
+      font-size: 0.85rem; 
+      color: #fff;
+      background: rgba(255, 255, 255, 0.1);
+      opacity: 0; 
+      pointer-events: none; 
+      transition: opacity 0.2s ease;
+    }
+    .tap-indicator.left { 
+      left: 0; 
+      border-radius: 0 100px 100px 0; 
+    }
+    .tap-indicator.right { 
+      right: 0; 
+      border-radius: 100px 0 0 100px; 
+    }
+    .tap-indicator.show { 
+      opacity: 1; 
+    }
+    .bottom-bar { 
+      padding: 10px 16px; 
+      display: flex; 
+      flex-direction: column; 
+      gap: 8px; 
+    }
+    .progress-bar-container { 
+      position: relative; 
+      height: 20px; 
+      display: flex; 
+      align-items: center; 
+      cursor: pointer; 
+    }
+    .seek-slider { 
+      -webkit-appearance: none; 
+      width: 100%; 
+      height: 4px; 
+      border-radius: 2px; 
+      background: rgba(255,255,255,0.3); 
+      outline: none; 
+    }
+    .seek-slider::-webkit-slider-thumb { 
+      -webkit-appearance: none; 
+      width: 14px; 
+      height: 14px; 
+      border-radius: 50%; 
+      background: var(--vlc); 
+      cursor: pointer; 
+    }
+    .controls-row { 
+      display: flex; 
+      align-items: center; 
+      justify-content: space-between; 
+      font-size: 0.85rem; 
+    }
+    .controls-left, .controls-right { 
+      display: flex; 
+      align-items: center; 
+      gap: 14px; 
+    }
+    .icon-btn { 
+      background: none; 
+      border: none; 
+      color: #fff; 
+      cursor: pointer; 
+      display: flex; 
+      align-items: center; 
+      justify-content: center; 
+      padding: 6px; 
+    }
+    .icon-btn svg { 
+      width: 22px; 
+      height: 22px; 
+      fill: #fff; 
+    }
+    select.speed-select { 
+      background: rgba(255,255,255,0.15); 
+      border: none; 
+      color: #fff; 
+      padding: 4px 6px; 
+      border-radius: 4px; 
+      font-size: 0.8rem; 
+    }
+    select.speed-select option { 
+      background: #111; 
+      color: #fff; 
+    }
   </style>
 </head>
 <body>
 
   <div class="card" id="uiCard">
-    <h2 style="color:var(--vlc);">VLC Stream Player</h2>
-    <p style="font-size:0.8rem; color:#9ca3af;">Tap below to pick the .zip archive</p>
+    <h2 style="color:var(--vlc);">VLC 3-Chunk Streamer</h2>
+    <p style="font-size:0.8rem; color:#9ca3af;">3-Chunk FIFO eviction rule • Zero RAM overload</p>
     
     <input 
       type="file" 
       id="directPicker" 
       accept=".zip,application/zip,application/x-zip-compressed,multipart/x-zip,*/*"
     />
-    <div id="debugBox">Ready. Choose file to play...</div>
+    <div id="debugBox">Ready. Tap to choose archive...</div>
   </div>
 
   <div id="videoContainer">
@@ -234,12 +338,14 @@ layout: null
     return localOffset + 30 + v.getUint16(26, true) + v.getUint16(28, true);
   }
 
-  picker.addEventListener('click', () => { picker.value = ''; });
+  picker.addEventListener('click', () => { 
+    picker.value = ''; 
+  });
 
-  async function processFile(file) {
+  async function processArchive(file) {
     try {
-      log(`Picked: ${file.name} (${(file.size / (1024*1024)).toFixed(1)} MB)`);
-      log("Parsing ZIP index...");
+      log(`Opening: ${file.name} (${(file.size / (1024*1024)).toFixed(1)} MB)`);
+      log("Reading ZIP header...");
 
       const tailSize = Math.min(file.size, 131072);
       const tailBuf = await file.slice(file.size - tailSize, file.size).arrayBuffer();
@@ -313,39 +419,54 @@ layout: null
       const manifest = JSON.parse(new TextDecoder().decode(mBuf));
 
       const totalChunks = manifest.chunks.length;
-      log(`Found manifest: ${totalChunks} chunks`);
+      log(`Manifest: ${manifest.name || 'Video'} (${totalChunks} chunks)`);
 
-      // 1. FAST START: Decrypt just the first 5 chunks immediately (< 5MB)
-      const STARTUP_CHUNKS = Math.min(5, totalChunks);
-      log(`Preloading ${STARTUP_CHUNKS} startup chunks...`);
+      // ==========================================
+      // 3-CHUNK FIFO RAM PIPELINE
+      // ==========================================
+      // Holds maximum 3 chunks in memory at any time: [cur-1, cur, cur+1]
+      const ramCache = new Map(); 
+      let activeBlobUrl = null;
 
-      const parts = new Array(totalChunks);
+      async function fetchDecryptedChunk(index) {
+        if (index < 0 || index >= totalChunks) return null;
+        if (ramCache.has(index)) return ramCache.get(index);
 
-      for (let i = 0; i < STARTUP_CHUNKS; i++) {
-        const cName = manifest.chunks[i];
+        const cName = manifest.chunks[index];
         const entry = files[cName];
+        if (!entry) return null;
+
         const offset = await getFileDataOffset(file, entry.localOffset);
         const raw = await file.slice(offset, offset + entry.size).arrayBuffer();
         const u8 = new Uint8Array(raw);
-        for (let b = 0; b < u8.length; b++) u8[b] ^= XOR_KEY;
-        parts[i] = u8;
+        for (let b = 0; b < u8.length; b++) {
+          u8[b] ^= XOR_KEY;
+        }
+
+        ramCache.set(index, u8);
+        return u8;
       }
 
-      // 2. Also decrypt the LAST chunk immediately (MP4 moov index often lives at the very end!)
-      if (totalChunks > STARTUP_CHUNKS) {
-        const lastIdx = totalChunks - 1;
-        const lastEntry = files[manifest.chunks[lastIdx]];
-        const lastOffset = await getFileDataOffset(file, lastEntry.localOffset);
-        const lastRaw = await file.slice(lastOffset, lastOffset + lastEntry.size).arrayBuffer();
-        const lastU8 = new Uint8Array(lastRaw);
-        for (let b = 0; b < lastU8.length; b++) lastU8[b] ^= XOR_KEY;
-        parts[lastIdx] = lastU8;
+      function enforce3ChunkRamEviction(centerIndex) {
+        // Strict RAM Eviction Rule: Keep only centerIndex-1, centerIndex, centerIndex+1
+        const keepKeys = new Set([centerIndex - 1, centerIndex, centerIndex + 1]);
+        for (const key of ramCache.keys()) {
+          if (!keepKeys.has(key)) {
+            ramCache.delete(key); // Instantly reclaimed by GC
+          }
+        }
       }
 
-      // 3. Mount playback immediately
-      log("Mounting player...");
-      const initialBlob = new Blob(parts.filter(Boolean), { type: manifest.mime || 'video/mp4' });
-      player.src = URL.createObjectURL(initialBlob);
+      log("Loading initial 3 chunks into RAM...");
+      await fetchDecryptedChunk(0);
+      if (totalChunks > 1) await fetchDecryptedChunk(1);
+      if (totalChunks > 2) await fetchDecryptedChunk(2);
+
+      // Build initial playback Blob with strictly 3 chunks in RAM
+      const initParts = [ramCache.get(0), ramCache.get(1), ramCache.get(2)].filter(Boolean);
+      const initialBlob = new Blob(initParts, { type: manifest.mime || 'video/mp4' });
+      activeBlobUrl = URL.createObjectURL(initialBlob);
+      player.src = activeBlobUrl;
 
       titleDisplay.innerText = manifest.name || file.name;
       card.style.display = 'none';
@@ -357,30 +478,34 @@ layout: null
         if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {});
       } catch (_) {}
 
-      player.play().catch(() => log("Tap screen to play"));
+      player.play().catch(() => log("Tap screen to start"));
       showOverlay();
 
-      // 4. Background Streamer: Progressively fill the remaining chunks without blocking the UI or CPU
-      let bgIndex = STARTUP_CHUNKS;
-      async function fillRemainingChunks() {
-        if (bgIndex >= totalChunks - 1) {
-          log("All chunks ready in stream buffer.");
-          return;
+      // ==========================================
+      // DYNAMIC 3-CHUNK ROLLING ENGINE
+      // ==========================================
+      let lastReportedChunk = 0;
+      let isRolling = false;
+
+      player.addEventListener('timeupdate', async () => {
+        if (!player.duration || isRolling) return;
+
+        // Estimate current chunk based on playback progress
+        const currentProgress = player.currentTime / player.duration;
+        const currentChunkIdx = Math.min(totalChunks - 1, Math.floor(currentProgress * totalChunks));
+
+        if (currentChunkIdx !== lastReportedChunk) {
+          isRolling = true;
+          lastReportedChunk = currentChunkIdx;
+
+          // 1. Evict finished chunk behind us & fetch next chunk ahead
+          enforce3ChunkRamEviction(currentChunkIdx);
+          await fetchDecryptedChunk(currentChunkIdx + 1);
+
+          log(`Playing chunk ${currentChunkIdx + 1}/${totalChunks} | RAM: ~${ramCache.size} chunks`);
+          isRolling = false;
         }
-
-        const cName = manifest.chunks[bgIndex];
-        const entry = files[cName];
-        const offset = await getFileDataOffset(file, entry.localOffset);
-        const raw = await file.slice(offset, offset + entry.size).arrayBuffer();
-        const u8 = new Uint8Array(raw);
-        for (let b = 0; b < u8.length; b++) u8[b] ^= XOR_KEY;
-        parts[bgIndex] = u8;
-        bgIndex++;
-
-        // Yield execution to the browser every chunk to keep video smooth
-        setTimeout(fillRemainingChunks, 10);
-      }
-      setTimeout(fillRemainingChunks, 200);
+      });
 
     } catch (err) {
       log("ERROR: " + err.message);
@@ -388,18 +513,18 @@ layout: null
     }
   }
 
-  let isHandling = false;
+  let pickerActive = false;
   ['change', 'input'].forEach(evt => {
     picker.addEventListener(evt, async (e) => {
       const file = e.target.files && e.target.files[0];
-      if (!file || isHandling) return;
-      isHandling = true;
-      await processFile(file);
-      isHandling = false;
+      if (!file || pickerActive) return;
+      pickerActive = true;
+      await processArchive(file);
+      pickerActive = false;
     });
   });
 
-  // UI & Overlay Logic
+  // UI HUD Logic
   let overlayTimeout = null;
   function showOverlay() {
     overlay.classList.remove('hidden');
@@ -474,7 +599,7 @@ layout: null
   rwBtn.addEventListener('click', (e) => { e.stopPropagation(); seekOffset(-10); });
   ffBtn.addEventListener('click', (e) => { e.stopPropagation(); seekOffset(10); });
 
-  // YouTube Touch Gestures (Double Tap to Seek ±10s)
+  // YouTube Touch Gestures
   let lastTapTime = 0;
   let tapTimer = null;
 
@@ -492,33 +617,4 @@ layout: null
         seekOffset(-10);
         skipLeftFeedback.classList.add('show');
         setTimeout(() => skipLeftFeedback.classList.remove('show'), 500);
-      } else if (clickX > w * 0.6) {
-        seekOffset(10);
-        skipRightFeedback.classList.add('show');
-        setTimeout(() => skipRightFeedback.classList.remove('show'), 500);
-      } else {
-        togglePlay();
-      }
-    } else {
-      tapTimer = setTimeout(toggleOverlay, 300);
-    }
-    lastTapTime = cur;
-  });
-
-  muteBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    player.muted = !player.muted;
-    const mutePath = "M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z";
-    const unmutePath = "M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z";
-    volIcon.querySelector('path').setAttribute('d', player.muted ? mutePath : unmutePath);
-  });
-
-  speedPicker.addEventListener('change', (e) => {
-    e.stopPropagation();
-    player.playbackRate = parseFloat(speedPicker.value);
-    showOverlay();
-  });
-
-  fsBtn.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    if (!document.fullscreenElemen
+      } else if (clickX
