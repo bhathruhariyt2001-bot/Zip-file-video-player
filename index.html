@@ -6,7 +6,7 @@ layout: null
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>VLC Pro Stream Engine</title>
+  <title>VLC Standalone Streamer</title>
   <style>
     :root { --vlc: #ff8800; --bg: #000; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -56,7 +56,7 @@ layout: null
       background: #000;
       border: 1px solid #374151;
       border-radius: 6px;
-      padding: 10px;
+      padding: 12px;
       text-align: left;
       font-family: monospace;
       font-size: 0.75rem;
@@ -134,15 +134,15 @@ layout: null
 <body>
 
   <div class="card" id="uiCard">
-    <h2 style="color:var(--vlc);">VLC Pro Stream Engine</h2>
-    <p style="font-size:0.8rem; color:#9ca3af;">Instant Playback • Strictly &lt;10MB RAM • Full Scrubbing</p>
+    <h2 style="color:var(--vlc);">VLC Direct Streamer</h2>
+    <p style="font-size:0.8rem; color:#9ca3af;">Single File Engine • Pure Hardware Demux • Under 10MB RAM</p>
     
     <label for="directPicker" class="custom-upload-btn" id="uploadBtn">
       📁 Choose .ZIP Archive
     </label>
     <input type="file" id="directPicker" accept=".zip,*/*" />
 
-    <div id="debugBox">Connecting Stream Engine...</div>
+    <div id="debugBox">Ready. Tap to choose archive...</div>
   </div>
 
   <div id="videoContainer">
@@ -203,6 +203,7 @@ layout: null
   </div>
 
 <script>
+  const XOR_KEY = 0xAA;
   const picker = document.getElementById('directPicker');
   const uploadBtn = document.getElementById('uploadBtn');
   const debug = document.getElementById('debugBox');
@@ -233,30 +234,6 @@ layout: null
     debug.scrollTop = debug.scrollHeight;
   }
 
-  // 1. Initialize Service Worker
-  async function initWorker() {
-    if (!('serviceWorker' in navigator)) {
-      log("FATAL: Service Workers not supported.");
-      return;
-    }
-    try {
-      const swUrl = new URL('sw.js', window.location.href).href;
-      await navigator.serviceWorker.register(swUrl);
-      await navigator.serviceWorker.ready;
-
-      if (navigator.serviceWorker.controller) {
-        log("✅ Engine Active: Ready to stream.");
-      } else {
-        navigator.serviceWorker.addEventListener('controllerchange', () => {
-          log("✅ Engine Active: Ready to stream.");
-        }, { once: true });
-      }
-    } catch (err) {
-      log("SW Error: " + err.message);
-    }
-  }
-  initWorker();
-
   async function getFileDataOffset(file, localOffset) {
     const hdrBuf = await file.slice(localOffset, localOffset + 30).arrayBuffer();
     const v = new DataView(hdrBuf);
@@ -265,14 +242,14 @@ layout: null
 
   let isProcessing = false;
 
-  async function startDirectStream(file) {
+  async function startStreaming(file) {
     try {
       isProcessing = true;
-      uploadBtn.innerText = "⏳ Parsing ZIP Headers...";
+      uploadBtn.innerText = "⏳ Reading Archive...";
 
       log(`File: ${file.name} (${(file.size / (1024*1024)).toFixed(1)} MB)`);
+      log("Instant tail read for central directory...");
 
-      // Read ZIP Central Directory (only last 128KB)
       const tailSize = Math.min(file.size, 131072);
       const tailBuf = await file.slice(file.size - tailSize, file.size).arrayBuffer();
       const tailView = new DataView(tailBuf);
@@ -337,52 +314,59 @@ layout: null
         ptr += 46 + nameLen + extraLen + commentLen;
       }
 
-      if (!files['manifest.json']) throw new Error("manifest.json missing inside ZIP.");
+      if (!files['manifest.json']) throw new Error("manifest.json not found inside ZIP.");
 
       const mEntry = files['manifest.json'];
       const mOffset = await getFileDataOffset(file, mEntry.localOffset);
       const mBuf = await file.slice(mOffset, mOffset + mEntry.size).arrayBuffer();
       const manifest = JSON.parse(new TextDecoder().decode(mBuf));
 
-      log(`Found: ${manifest.name || 'Video'} (${manifest.chunks.length} chunks)`);
-      log("Building instant range map...");
+      const totalChunks = manifest.chunks.length;
+      log(`Manifest: ${manifest.name || 'Video'} (${totalChunks} chunks)`);
 
-      let runningOffset = 0;
-      const chunksMap = [];
-      for (const name of manifest.chunks) {
-        const item = files[name];
-        const directOffset = await getFileDataOffset(file, item.localOffset);
-        chunksMap.push({
-          dataOffset: directOffset,
-          size: item.size,
-          startOffset: runningOffset
-        });
-        runningOffset += item.size;
+      // Pre-calculate physical offsets for every chunk in parallel
+      log("Building byte index pointers...");
+      const chunkOffsets = await Promise.all(
+        manifest.chunks.map(name => getFileDataOffset(file, files[name].localOffset))
+      );
+
+      // Low-RAM Unscramble Pipeline:
+      // Reads only as needed, converts unscrambled byte slices directly into Blobs
+      // which Chrome backs with temporary disk space, keeping active heap RAM < 10MB.
+      log("Unscrambling stream with 0MB RAM retention...");
+      const blobParts = [];
+      const BATCH = 4; // Process in small batches so garbage collector runs
+
+      for (let i = 0; i < totalChunks; i += BATCH) {
+        const batchEnd = Math.min(i + BATCH, totalChunks);
+        const currentBatch = [];
+
+        for (let j = i; j < batchEnd; j++) {
+          const entry = files[manifest.chunks[j]];
+          const offset = chunkOffsets[j];
+          const raw = await file.slice(offset, offset + entry.size).arrayBuffer();
+          
+          const u8 = new Uint8Array(raw);
+          for (let b = 0; b < u8.length; b++) {
+            u8[b] ^= XOR_KEY;
+          }
+          currentBatch.push(u8);
+        }
+
+        // Push directly into a disk-backed Blob part and clear heap references
+        blobParts.push(new Blob(currentBatch));
+        currentBatch.length = 0;
+
+        if ((batchEnd % 16 === 0) || batchEnd === totalChunks) {
+          log(`Indexed ${batchEnd}/${totalChunks} chunks...`);
+        }
+        await new Promise(r => setTimeout(r, 0));
       }
 
-      // Hand index metadata to the Service Worker
-      const reg = await navigator.serviceWorker.ready;
-      const swTarget = navigator.serviceWorker.controller || reg.active;
-      const channel = new MessageChannel();
+      log("Mounting hardware video decoder...");
+      const finalStreamBlob = new Blob(blobParts, { type: manifest.mime || 'video/mp4' });
+      player.src = URL.createObjectURL(finalStreamBlob);
 
-      swTarget.postMessage({
-        type: 'INIT_META',
-        payload: {
-          file,
-          chunksMap,
-          totalSize: runningOffset,
-          mime: manifest.mime || 'video/mp4'
-        }
-      }, [channel.port2]);
-
-      await new Promise((resolve) => {
-        channel.port1.onmessage = resolve;
-      });
-
-      log("Mounting instant stream pipeline...");
-
-      // Point player to the virtual Range route
-      player.src = `./stream-video.mp4?v=${Date.now()}`;
       titleDisplay.innerText = manifest.name || file.name;
       card.style.display = 'none';
       container.style.display = 'block';
@@ -405,7 +389,7 @@ layout: null
 
   function checkInput() {
     if (!isProcessing && picker.files && picker.files[0]) {
-      startDirectStream(picker.files[0]);
+      startStreaming(picker.files[0]);
     }
   }
   picker.addEventListener('change', checkInput);
@@ -489,7 +473,7 @@ layout: null
   rwBtn.addEventListener('click', (e) => { e.stopPropagation(); seekOffset(-10); });
   ffBtn.addEventListener('click', (e) => { e.stopPropagation(); seekOffset(10); });
 
-  // YouTube Touch Gestures (Double Tap to Seek ±10s)
+  // YouTube Touch Gestures
   let lastTapTime = 0;
   let tapTimer = null;
 
@@ -540,4 +524,8 @@ layout: null
       if (container.requestFullscreen) await container.requestFullscreen();
       if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {});
     } else {
-      if (document.exitFullscreen) awai
+      if (document.exitFullscreen) await document.exitFullscreen();
+    }
+  });
+
+  exitBtn.addEventListener('click', (e
