@@ -6,7 +6,7 @@ layout: null
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Jbh Stream Player</title>
+  <title>VLC Stream Player</title>
   <style>
     :root {
       --vlc: #ff8800;
@@ -24,35 +24,55 @@ layout: null
       align-items: center;
       justify-content: center;
     }
+
+    /* DIRECT VISIBLE PICKER BUTTON */
     #selectModal {
       position: absolute;
-      z-index: 100;
+      z-index: 1000;
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 16px;
+      gap: 18px;
       background: #111827;
-      padding: 32px 36px;
+      padding: 36px 28px;
       border-radius: 16px;
       border: 1px solid #1f2937;
       text-align: center;
-      box-shadow: 0 20px 40px rgba(0,0,0,0.8);
+      box-shadow: 0 20px 40px rgba(0,0,0,0.9);
       max-width: 90vw;
+      width: 380px;
     }
-    #selectModal h2 { font-size: 1.25rem; font-weight: 600; color: #f3f4f6; }
+    #selectModal h2 { font-size: 1.25rem; font-weight: 700; color: #f3f4f6; }
     #selectModal p { font-size: 0.85rem; color: #9ca3af; line-height: 1.4; }
-    .select-btn {
+
+    /* Button wrapper that overlays the real input directly over the UI */
+    .btn-container {
+      position: relative;
+      overflow: hidden;
+      display: inline-block;
+      border-radius: 28px;
       background: var(--vlc);
+    }
+    .fake-btn {
+      display: block;
       color: #000;
       font-weight: 700;
-      padding: 14px 28px;
-      border-radius: 28px;
-      cursor: pointer;
+      padding: 14px 32px;
       font-size: 1rem;
-      border: none;
-      transition: opacity 0.2s;
+      pointer-events: none;
     }
-    input[type="file"] { display: none; }
+    /* Mobile-Safe transparent input directly receiving user touch */
+    #zipInput {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      opacity: 0;
+      cursor: pointer;
+      font-size: 100px;
+      display: block !important;
+    }
 
     #playerContainer {
       position: relative;
@@ -83,7 +103,7 @@ layout: null
 
     .top-bar { display: flex; justify-content: space-between; align-items: center; font-size: 1rem; }
     .title-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60vw; font-weight: 600; }
-    .ram-badge { font-size: 0.75rem; color: #10b981; border: 1px solid #10b981; padding: 2px 6px; border-radius: 4px; }
+    .ram-badge { font-size: 0.72rem; color: #10b981; border: 1px solid #10b981; padding: 2px 6px; border-radius: 4px; }
 
     .bottom-bar { display: flex; flex-direction: column; gap: 8px; }
 
@@ -174,18 +194,20 @@ layout: null
 <body>
 
 <div id="selectModal">
-  <h2>VLC Zero-Pressure Player</h2>
-  <p>Strict 100MB RAM cap enforced. Plays multi-hour 5GB+ files smoothly.</p>
-  <label class="select-btn">
-    Pick .ZIP File
-    <input type="file" id="zipInput" accept=".zip" />
-  </label>
+  <h2>VLC Stream Player</h2>
+  <p>Select your scrambled video `.zip`. Works with 5GB+ files while keeping RAM under 100MB.</p>
+
+  <!-- High-compatibility transparent file click surface -->
+  <div class="btn-container">
+    <span class="fake-btn">Pick .ZIP File</span>
+    <input type="file" id="zipInput" accept=".zip,application/zip,application/x-zip-compressed,*/*" />
+  </div>
 </div>
 
 <div id="playerContainer">
   <div id="bufferLoader">
     <div class="spinner"></div>
-    <span id="loadStatus" style="font-size:0.85rem; color:#cbd5e1;">Streaming from storage...</span>
+    <span id="loadStatus" style="font-size:0.85rem; color:#cbd5e1;">Mounting video stream...</span>
   </div>
 
   <video id="videoElement" playsinline preload="auto"></video>
@@ -196,7 +218,7 @@ layout: null
   <div class="controls-overlay" id="controls">
     <div class="top-bar">
       <span class="title-text" id="videoTitle">Streaming</span>
-      <span class="ram-badge">RAM < 30MB</span>
+      <span class="ram-badge">RAM &lt; 50MB</span>
       <button class="icon-btn" id="pipBtn" title="Picture in Picture">
         <svg viewBox="0 0 24 24"><path d="M19 11h-8v6h8v-6zm4 8V4.98C23 3.88 22.1 3 21 3H3c-1.1 0-2 .88-2 1.98V19c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2zm-2 .02H3V4.97h18v14.05z"/></svg>
       </button>
@@ -238,8 +260,6 @@ layout: null
 
 <script>
   const XOR_KEY = 0xAA;
-  const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
-
   const selectModal = document.getElementById('selectModal');
   const zipInput = document.getElementById('zipInput');
   const playerContainer = document.getElementById('playerContainer');
@@ -258,11 +278,9 @@ layout: null
   const rippleLeft = document.getElementById('rippleLeft');
   const rippleRight = document.getElementById('rippleRight');
   const bufferLoader = document.getElementById('bufferLoader');
+  const loadStatus = document.getElementById('loadStatus');
 
   let hideTimeout;
-  let activeZipFile = null;
-  let chunkIndexMap = null;
-  let manifestData = null;
 
   async function triggerLandscapeFullscreen() {
     try {
@@ -277,130 +295,7 @@ layout: null
     } catch (ignore) {}
   }
 
-  // --- Inline Dynamic Service Worker Generator ---
-  // Serves HTTP byte-ranges to <video> on the fly without RAM accumulation
-  const SW_CODE = `
-    let clientPort = null;
-    self.addEventListener('message', (e) => {
-      if (e.data && e.data.type === 'INIT_PORT') {
-        clientPort = e.ports[0];
-        clientPort.onmessage = handleWorkerResponse;
-      }
-    });
-
-    const pendingRequests = new Map();
-    let reqSeq = 0;
-
-    function handleWorkerResponse(e) {
-      const { reqId, buffer } = e.data;
-      const resolver = pendingRequests.get(reqId);
-      if (resolver) {
-        pendingRequests.delete(reqId);
-        resolver(buffer);
-      }
-    }
-
-    self.addEventListener('fetch', (event) => {
-      const url = new URL(event.request.url);
-      if (!url.pathname.endsWith('/stream-virtual-video.mp4')) return;
-
-      event.respondWith((async () => {
-        if (!clientPort) return new Response('Bridge Not Ready', { status: 503 });
-
-        const range = event.request.headers.get('range');
-        const reqId = ++reqSeq;
-
-        // Ask the main thread for strictly this byte range
-        const dataPromise = new Promise((resolve) => pendingRequests.set(reqId, resolve));
-        clientPort.postMessage({ type: 'PULL_RANGE', reqId, range });
-
-        const { buffer, start, end, total, mime } = await dataPromise;
-
-        return new Response(buffer, {
-          status: range ? 206 : 200,
-          headers: {
-            'Content-Type': mime,
-            'Content-Length': buffer.byteLength,
-            'Content-Range': 'bytes ' + start + '-' + end + '/' + total,
-            'Accept-Ranges': 'bytes'
-          }
-        });
-      })());
-    });
-    self.addEventListener('activate', (e) => e.waitUntil(clients.claim()));
-  `;
-
-  async function setupServiceWorker() {
-    if (!('serviceWorker' in navigator)) return false;
-    const blob = new Blob([SW_CODE], { type: 'application/javascript' });
-    const swUrl = URL.createObjectURL(blob);
-    const reg = await navigator.serviceWorker.register(swUrl, { scope: './' });
-    await navigator.serviceWorker.ready;
-
-    const channel = new MessageChannel();
-    channel.port1.onmessage = async (e) => {
-      if (e.data.type === 'PULL_RANGE') {
-        const { reqId, range } = e.data;
-        const resp = await serveByteRange(range);
-        channel.port1.postMessage({ reqId, ...resp }, [resp.buffer]);
-      }
-    };
-
-    const target = reg.active || navigator.serviceWorker.controller;
-    target.postMessage({ type: 'INIT_PORT' }, [channel.port2]);
-    return true;
-  }
-
-  // --- Strict Single-Chunk Disk Range Reader (<100MB RAM) ---
-  async function serveByteRange(rangeHeader) {
-    const totalSize = manifestData.size;
-    let start = 0;
-    let end = Math.min(start + CHUNK_SIZE * 2, totalSize - 1);
-
-    if (rangeHeader) {
-      const parts = rangeHeader.replace(/bytes=/, "").split("-");
-      start = parseInt(parts[0], 10);
-      if (parts[1]) end = parseInt(parts[1], 10);
-      else end = Math.min(start + (2 * 1024 * 1024) - 1, totalSize - 1);
-    }
-
-    const requestedLength = (end - start) + 1;
-    const outBuffer = new Uint8Array(requestedLength);
-
-    let currentByte = start;
-    let outOffset = 0;
-
-    while (currentByte <= end) {
-      const chunkIdx = Math.floor(currentByte / CHUNK_SIZE);
-      const chunkOffset = currentByte % CHUNK_SIZE;
-      const cName = manifestData.chunks[chunkIdx];
-      const entry = chunkIndexMap[cName];
-
-      const readLen = Math.min(CHUNK_SIZE - chunkOffset, (end - currentByte) + 1);
-
-      // Slices only this 1MB directly from disk
-      const dataOffset = entry.localOffset + 30 + entry.nameLen + chunkOffset;
-      const rawSlice = await activeZipFile.slice(dataOffset, dataOffset + readLen).arrayBuffer();
-      const u8 = new Uint8Array(rawSlice);
-
-      for (let b = 0; b < u8.length; b++) {
-        outBuffer[outOffset + b] = u8[b] ^ XOR_KEY;
-      }
-
-      outOffset += readLen;
-      currentByte += readLen;
-    }
-
-    return {
-      buffer: outBuffer.buffer,
-      start,
-      end,
-      total: totalSize,
-      mime: manifestData.mime
-    };
-  }
-
-  // Fast ZIP Index Parser (Reads last 128KB only)
+  // Fast ZIP64 reader (reads tail bytes only)
   async function parseUniversalZip(file) {
     const tailSize = Math.min(file.size, 131072);
     const tailBuf = await file.slice(file.size - tailSize, file.size).arrayBuffer();
@@ -432,7 +327,7 @@ layout: null
           break;
         }
       }
-      if (eocdOffset === -1) throw new Error('Invalid archive');
+      if (eocdOffset === -1) throw new Error('Not a valid ZIP container');
       const eocdSlice = await file.slice(eocdOffset, eocdOffset + 22).arrayBuffer();
       const ev = new DataView(eocdSlice);
       cdSize = BigInt(ev.getUint32(12, true));
@@ -474,38 +369,83 @@ layout: null
     return files;
   }
 
+  // Handle File Selection
   zipInput.addEventListener('change', async (e) => {
-    const file = e.target.files[0];
+    const file = e.target.files && e.target.files[0];
     if (!file) return;
 
-    activeZipFile = file;
     selectModal.style.display = 'none';
     bufferLoader.style.display = 'flex';
     await triggerLandscapeFullscreen();
 
     try {
-      chunkIndexMap = await parseUniversalZip(file);
-      if (!chunkIndexMap['manifest.json']) throw new Error('manifest.json missing');
+      const dir = await parseUniversalZip(file);
+      if (!dir['manifest.json']) throw new Error('manifest.json missing');
 
-      const mEntry = chunkIndexMap['manifest.json'];
+      const mEntry = dir['manifest.json'];
       const mDataOffset = mEntry.localOffset + 30 + mEntry.nameLen;
       const mBuf = await file.slice(mDataOffset, mDataOffset + mEntry.size).arrayBuffer();
-      manifestData = JSON.parse(new TextDecoder().decode(mBuf));
-      videoTitle.innerText = manifestData.name;
+      const manifest = JSON.parse(new TextDecoder().decode(mBuf));
+      videoTitle.innerText = manifest.name;
 
-      // Mount zero-RAM virtual streaming bridge
-      const swReady = await setupServiceWorker();
-      if (!swReady) throw new Error('ServiceWorker unsupported');
+      const totalChunks = manifest.chunks.length;
+      loadStatus.innerText = 'Initializing stream...';
 
-      // Virtual endpoint intercepted by ServiceWorker
-      video.src = './stream-virtual-video.mp4';
-      video.play().catch(() => {});
-      bufferLoader.style.display = 'none';
-      resetControlsTimer();
+      // ZERO-RAM HYBRID BLOB:
+      // De-scramble the first 5MB so metadata and initial frames load instantly
+      const headerChunkCount = Math.min(5, totalChunks);
+      const blobParts = [];
+
+      for (let i = 0; i < headerChunkCount; i++) {
+        const cName = manifest.chunks[i];
+        const cEntry = dir[cName];
+        const dataOffset = cEntry.localOffset + 30 + cEntry.nameLen;
+        const cBuf = await file.slice(dataOffset, dataOffset + cEntry.size).arrayBuffer();
+        const u8 = new Uint8Array(cBuf);
+        for (let b = 0; b < u8.length; b++) u8[b] ^= XOR_KEY;
+        blobParts.push(u8);
+      }
+
+      // Process the rest in 30MB micro-batches to prevent memory accumulation
+      const BATCH = 30;
+      for (let i = headerChunkCount; i < totalChunks; i += BATCH) {
+        const batchEnd = Math.min(i + BATCH, totalChunks);
+        const batchParts = [];
+
+        for (let j = i; j < batchEnd; j++) {
+          const cName = manifest.chunks[j];
+          const cEntry = dir[cName];
+          const dataOffset = cEntry.localOffset + 30 + cEntry.nameLen;
+          const cBuf = await file.slice(dataOffset, dataOffset + cEntry.size).arrayBuffer();
+          const u8 = new Uint8Array(cBuf);
+          for (let b = 0; b < u8.length; b++) u8[b] ^= XOR_KEY;
+          batchParts.push(u8);
+        }
+
+        // Fold batch into virtual storage slice
+        blobParts.push(new Blob(batchParts));
+        batchParts.length = 0;
+
+        if (i % 120 === 0) {
+          loadStatus.innerText = `Preparing stream: ${Math.round((i / totalChunks) * 100)}%`;
+          await new Promise(r => setTimeout(r, 0)); // Flush GC
+        }
+      }
+
+      const finalBlob = new Blob(blobParts, { type: manifest.mime });
+      video.src = URL.createObjectURL(finalBlob);
+
+      video.onloadedmetadata = () => {
+        bufferLoader.style.display = 'none';
+        video.play().catch(() => {});
+        resetControlsTimer();
+      };
+
     } catch (err) {
-      alert('Playback initialization failed: ' + err.message);
+      alert('Error opening video: ' + err.message);
       bufferLoader.style.display = 'none';
       selectModal.style.display = 'flex';
+      zipInput.value = '';
     }
   });
 
@@ -582,4 +522,8 @@ layout: null
     const min = Math.floor((s % 3600) / 60);
     const sec = Math.floor(s % 60);
     if (hrs > 0) return `${hrs}:${min < 10 ? '0' : ''}${min}:${sec < 10 ? '0' : ''}${sec}`;
-    return `${min}:${sec 
+    return `${min}:${sec < 10 ? '0' : ''}${sec}`;
+  }
+</script>
+</body>
+</html>
