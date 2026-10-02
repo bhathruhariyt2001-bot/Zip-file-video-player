@@ -6,7 +6,7 @@ layout: null
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Advanced Video Player</title>
+  <title>ZIP64 Advanced Video Player</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
     html, body {
@@ -144,7 +144,7 @@ layout: null
 
 <div id="selectModal">
   <h2>Watch Encrypted Video</h2>
-  <p>Select your scrambled .ZIP file. It will play directly in fullscreen without RAM buildup.</p>
+  <p>Select any scrambled .ZIP (Supports 5GB+ ZIP64). Zero RAM overload.</p>
   <label class="select-btn">
     Pick .ZIP File
     <input type="file" id="zipInput" accept=".zip" />
@@ -212,43 +212,82 @@ layout: null
 
   let hideTimeout;
 
-  // Zero-RAM Built-in ZIP Directory Parser (Reads offsets directly from disk)
-  async function parseZipDirectory(file) {
-    const tailSize = Math.min(file.size, 65536);
+  // Zero-RAM Universal ZIP32 / ZIP64 Parser
+  async function parseUniversalZip(file) {
+    // Read last 128KB of the file to inspect EOCD and ZIP64 locator
+    const tailSize = Math.min(file.size, 131072);
     const tailBuf = await file.slice(file.size - tailSize, file.size).arrayBuffer();
     const tailView = new DataView(tailBuf);
-    let eocdOffset = -1;
+    
+    let isZip64 = false;
+    let cdOffset = 0n;
+    let cdSize = 0n;
 
-    for (let i = tailBuf.byteLength - 22; i >= 0; i--) {
-      if (tailView.getUint32(i, true) === 0x06054b50) {
-        eocdOffset = file.size - tailSize + i;
+    // Check for ZIP64 Locator (0x07064b50)
+    for (let i = tailBuf.byteLength - 20; i >= 0; i--) {
+      if (tailView.getUint32(i, true) === 0x07064b50) {
+        const zip64EOCDOffset = tailView.getBigUint64(i + 8, true);
+        isZip64 = true;
+
+        // Read ZIP64 EOCD (56 bytes) directly
+        const z64Buf = await file.slice(Number(zip64EOCDOffset), Number(zip64EOCDOffset) + 56).arrayBuffer();
+        const z64View = new DataView(z64Buf);
+        if (z64View.getUint32(0, true) === 0x06064b50) {
+          cdSize = z64View.getBigUint64(40, true);
+          cdOffset = z64View.getBigUint64(48, true);
+        }
         break;
       }
     }
-    if (eocdOffset === -1) throw new Error('Invalid ZIP structure');
 
-    const eocdSlice = await file.slice(eocdOffset, eocdOffset + 22).arrayBuffer();
-    const ev = new DataView(eocdSlice);
-    const cdSize = ev.getUint32(12, true);
-    const cdOffset = ev.getUint32(16, true);
+    // Fallback to Standard 32-bit EOCD if not ZIP64
+    if (!isZip64) {
+      let eocdOffset = -1;
+      for (let i = tailBuf.byteLength - 22; i >= 0; i--) {
+        if (tailView.getUint32(i, true) === 0x06054b50) {
+          eocdOffset = file.size - tailSize + i;
+          break;
+        }
+      }
+      if (eocdOffset === -1) throw new Error('Not a valid ZIP container');
+      const eocdSlice = await file.slice(eocdOffset, eocdOffset + 22).arrayBuffer();
+      const ev = new DataView(eocdSlice);
+      cdSize = BigInt(ev.getUint32(12, true));
+      cdOffset = BigInt(ev.getUint32(16, true));
+    }
 
-    const cdBuf = await file.slice(cdOffset, cdOffset + cdSize).arrayBuffer();
+    // Read Central Directory Table
+    const cdBuf = await file.slice(Number(cdOffset), Number(cdOffset + cdSize)).arrayBuffer();
     const cdView = new DataView(cdBuf);
     const files = {};
     let ptr = 0;
 
     while (ptr < cdBuf.byteLength) {
       if (cdView.getUint32(ptr, true) !== 0x02014b50) break;
-      const size = cdView.getUint32(ptr + 20, true);
+      let size = BigInt(cdView.getUint32(ptr + 20, true));
       const nameLen = cdView.getUint16(ptr + 28, true);
       const extraLen = cdView.getUint16(ptr + 30, true);
       const commentLen = cdView.getUint16(ptr + 32, true);
-      const localOffset = cdView.getUint32(ptr + 42, true);
+      let localOffset = BigInt(cdView.getUint32(ptr + 42, true));
 
       const nameBytes = new Uint8Array(cdBuf, ptr + 46, nameLen);
       const name = new TextDecoder().decode(nameBytes);
 
-      files[name] = { size, localOffset, nameLen };
+      // Parse ZIP64 Extended Information Extra Field if offset is 0xFFFFFFFF
+      if (localOffset === 0xFFFFFFFFn && extraLen > 0) {
+        let ePtr = ptr + 46 + nameLen;
+        while (ePtr < ptr + 46 + nameLen + extraLen) {
+          const headerId = cdView.getUint16(ePtr, true);
+          const dataSize = cdView.getUint16(ePtr + 2, true);
+          if (headerId === 0x0001) { // ZIP64 tag
+            localOffset = cdView.getBigUint64(ePtr + 4, true);
+            break;
+          }
+          ePtr += 4 + dataSize;
+        }
+      }
+
+      files[name] = { size: Number(size), localOffset: Number(localOffset), nameLen };
       ptr += 46 + nameLen + extraLen + commentLen;
     }
     return files;
@@ -260,7 +299,6 @@ layout: null
 
     selectModal.style.display = 'none';
 
-    // Request native fullscreen
     if (playerContainer.requestFullscreen) {
       playerContainer.requestFullscreen().catch(() => {});
     } else if (playerContainer.webkitRequestFullscreen) {
@@ -268,7 +306,7 @@ layout: null
     }
 
     try {
-      const dir = await parseZipDirectory(file);
+      const dir = await parseUniversalZip(file);
       if (!dir['manifest.json']) throw new Error('manifest.json missing');
 
       const mEntry = dir['manifest.json'];
@@ -288,9 +326,11 @@ layout: null
         const cBuf = await file.slice(dataOffset, dataOffset + cEntry.size).arrayBuffer();
         const u8 = new Uint8Array(cBuf);
 
-        // De-scramble byte in-place
+        // De-scramble in-place
         for (let b = 0; b < u8.length; b++) u8[b] ^= XOR_KEY;
         restoredParts.push(u8);
+
+        if (i % 20 === 0) await new Promise(r => setTimeout(r, 0));
       }
 
       const blob = new Blob(restoredParts, { type: manifest.mime });
@@ -298,7 +338,7 @@ layout: null
       video.play();
       resetControlsTimer();
     } catch (err) {
-      alert('Error loading ZIP: ' + err.message);
+      alert('Error: ' + err.message);
       selectModal.style.display = 'flex';
     }
   });
