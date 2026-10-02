@@ -6,7 +6,7 @@ layout: null
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>VLC Player Stream Engine (MSE)</title>
+  <title>VLC Stream Player</title>
   <style>
     :root { --vlc: #ff8800; --bg: #000; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -70,20 +70,118 @@ layout: null
 <body>
 
   <div class="card" id="uiCard">
-    <h2 style="color:var(--vlc);">VLC Stream Player</h2>
-    <p style="font-size:0.8rem; color:#9ca3af;">Select scrambled .zip archive to stream via MSE</p>
+    <h2 style="color:var(--vlc);">VLC Stream Engine</h2>
+    <p style="font-size:0.8rem; color:#9ca3af;">Select scrambled .zip archive (supports 10GB+ with zero RAM usage).</p>
     
     <input type="file" id="directPicker" />
-
-    <div id="debugBox">Status: Waiting for file selection...</div>
+    <div id="debugBox">Initializing worker engine...</div>
   </div>
 
   <div id="videoContainer">
     <video id="player" controls playsinline></video>
   </div>
 
+<!-- Embedded Service Worker Script -->
+<script id="sw-script" type="text/plain">
+const XOR_KEY = 0xAA;
+let activeArchive = null;
+
+self.addEventListener('install', (e) => self.skipWaiting());
+self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'INIT_ARCHIVE') {
+    activeArchive = event.data.payload;
+    if (event.ports && event.ports[0]) {
+      event.ports[0].postMessage({ status: 'READY' });
+    }
+  }
+});
+
+async function getFileDataOffset(file, localOffset) {
+  const hdrBuf = await file.slice(localOffset, localOffset + 30).arrayBuffer();
+  const v = new DataView(hdrBuf);
+  return localOffset + 30 + v.getUint16(26, true) + v.getUint16(28, true);
+}
+
+self.addEventListener('fetch', (event) => {
+  const url = new URL(event.request.url);
+  if (!url.pathname.endsWith('/stream-virtual-video.mp4') || !activeArchive) {
+    return;
+  }
+
+  event.respondWith((async () => {
+    const { file, chunksMap, totalSize, mime } = activeArchive;
+    const rangeHeader = event.request.headers.get('range');
+
+    let start = 0;
+    let end = totalSize - 1;
+
+    if (rangeHeader) {
+      const match = rangeHeader.match(/bytes=(\d+)-(\d*)/);
+      if (match) {
+        start = parseInt(match[1], 10);
+        if (match[2]) end = parseInt(match[2], 10);
+      }
+    }
+
+    if (start >= totalSize || end >= totalSize) {
+      return new Response(null, {
+        status: 416,
+        headers: { 'Content-Range': `bytes */${totalSize}` }
+      });
+    }
+
+    const requestedLength = (end - start) + 1;
+
+    // Stream on-demand chunks directly through Range requests
+    const stream = new ReadableStream({
+      async start(controller) {
+        let currentPos = start;
+
+        let cIdx = 0;
+        while (cIdx < chunksMap.length && (chunksMap[cIdx].startOffset + chunksMap[cIdx].size) <= currentPos) {
+          cIdx++;
+        }
+
+        while (currentPos <= end && cIdx < chunksMap.length) {
+          const item = chunksMap[cIdx];
+          const chunkInPos = currentPos - item.startOffset;
+          const chunkRem = item.size - chunkInPos;
+          const toRead = Math.min(chunkRem, (end - currentPos) + 1);
+
+          const payloadBase = await getFileDataOffset(file, item.localOffset);
+          const sliceStart = payloadBase + chunkInPos;
+          const raw = await file.slice(sliceStart, sliceStart + toRead).arrayBuffer();
+
+          const u8 = new Uint8Array(raw);
+          for (let b = 0; b < u8.length; b++) {
+            u8[b] ^= XOR_KEY;
+          }
+
+          controller.enqueue(u8);
+          currentPos += toRead;
+          cIdx++;
+        }
+
+        controller.close();
+      }
+    });
+
+    return new Response(stream, {
+      status: 206,
+      headers: {
+        'Content-Type': mime || 'video/mp4',
+        'Content-Range': `bytes ${start}-${end}/${totalSize}`,
+        'Content-Length': requestedLength.toString(),
+        'Accept-Ranges': 'bytes'
+      }
+    });
+  })());
+});
+</script>
+
 <script>
-  const XOR_KEY = 0xAA;
   const picker = document.getElementById('directPicker');
   const debug = document.getElementById('debugBox');
   const card = document.getElementById('uiCard');
@@ -95,27 +193,33 @@ layout: null
     debug.scrollTop = debug.scrollHeight;
   }
 
-  // Helper to resolve exact file payload offset by reading local header
+  // Self-register service worker on GitHub Pages
+  let swReady = false;
+  async function initWorker() {
+    if (!('serviceWorker' in navigator)) {
+      log("Error: Service Workers not supported in this browser.");
+      return;
+    }
+    try {
+      const swCode = document.getElementById('sw-script').textContent;
+      const swBlob = new Blob([swCode], { type: 'application/javascript' });
+      const swUrl = URL.createObjectURL(swBlob);
+      
+      const reg = await navigator.serviceWorker.register(swUrl, { scope: './' });
+      await navigator.serviceWorker.ready;
+      swReady = true;
+      log("Ready: Worker loaded successfully on GitHub.");
+    } catch (err) {
+      log("Worker Init Error: " + err.message);
+    }
+  }
+
+  initWorker();
+
   async function getFileDataOffset(file, localOffset) {
     const hdrBuf = await file.slice(localOffset, localOffset + 30).arrayBuffer();
     const v = new DataView(hdrBuf);
-    if (v.getUint32(0, true) !== 0x04034b50) {
-      throw new Error(`Invalid local header signature at ${localOffset}`);
-    }
-    const nameLen = v.getUint16(26, true);
-    const extraLen = v.getUint16(28, true);
-    return localOffset + 30 + nameLen + extraLen;
-  }
-
-  // Read and decrypt one chunk on demand
-  async function readChunk(file, entry) {
-    const dataOffset = await getFileDataOffset(file, entry.localOffset);
-    const raw = await file.slice(dataOffset, dataOffset + entry.size).arrayBuffer();
-    const u8 = new Uint8Array(raw);
-    for (let i = 0; i < u8.length; i++) {
-      u8[i] ^= XOR_KEY;
-    }
-    return u8;
+    return localOffset + 30 + v.getUint16(26, true) + v.getUint16(28, true);
   }
 
   picker.addEventListener('change', async (e) => {
@@ -124,16 +228,13 @@ layout: null
       if (!file) return;
 
       log(`File: ${file.name} (${(file.size / (1024*1024)).toFixed(1)} MB)`);
-      log("Scanning Central Directory...");
+      log("Scanning archive index...");
 
-      // 1. Locate EOCD or ZIP64
       const tailSize = Math.min(file.size, 131072);
       const tailBuf = await file.slice(file.size - tailSize, file.size).arrayBuffer();
       const tailView = new DataView(tailBuf);
       
-      let cdOffset = 0n;
-      let cdSize = 0n;
-      let isZip64 = false;
+      let cdOffset = 0n, cdSize = 0n, isZip64 = false;
 
       for (let i = tailBuf.byteLength - 20; i >= 0; i--) {
         if (tailView.getUint32(i, true) === 0x07064b50) {
@@ -155,14 +256,13 @@ layout: null
             break;
           }
         }
-        if (eocd === -1) throw new Error("File is not a valid ZIP archive.");
+        if (eocd === -1) throw new Error("Not a valid ZIP archive.");
         const eocdSlice = await file.slice(eocd, eocd + 22).arrayBuffer();
         const ev = new DataView(eocdSlice);
         cdSize = BigInt(ev.getUint32(12, true));
         cdOffset = BigInt(ev.getUint32(16, true));
       }
 
-      // 2. Read Central Directory Entries
       const cdBuf = await file.slice(Number(cdOffset), Number(cdOffset + cdSize)).arrayBuffer();
       const cdView = new DataView(cdBuf);
       const files = {};
@@ -194,90 +294,52 @@ layout: null
         ptr += 46 + nameLen + extraLen + commentLen;
       }
 
-      if (!files['manifest.json']) throw new Error("manifest.json missing inside ZIP.");
-      
-      // 3. Parse Manifest
+      if (!files['manifest.json']) throw new Error("manifest.json missing.");
+
+      // Parse manifest
       const mEntry = files['manifest.json'];
       const mOffset = await getFileDataOffset(file, mEntry.localOffset);
       const mBuf = await file.slice(mOffset, mOffset + mEntry.size).arrayBuffer();
       const manifest = JSON.parse(new TextDecoder().decode(mBuf));
 
-      log(`Found manifest: ${manifest.name} (${manifest.chunks.length} chunks)`);
-
-      const mimeType = manifest.mime || 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"';
-      if (!MediaSource.isTypeSupported(mimeType)) {
-        throw new Error(`MediaSource does not support MIME type: ${mimeType}`);
+      // Build chunk index map
+      let runningOffset = 0;
+      const chunksMap = [];
+      for (const name of manifest.chunks) {
+        const item = files[name];
+        chunksMap.push({
+          localOffset: item.localOffset,
+          size: item.size,
+          startOffset: runningOffset
+        });
+        runningOffset += item.size;
       }
 
-      // 4. Initialize MediaSource
-      const ms = new MediaSource();
-      player.src = URL.createObjectURL(ms);
+      log(`Found ${manifest.chunks.length} chunks (${(runningOffset / (1024*1024)).toFixed(1)} MB total).`);
+      log("Connecting virtual HTTP pipeline...");
 
-      ms.addEventListener('sourceopen', () => {
-        log("MediaSource opened. Configuring SourceBuffer...");
-        const sb = ms.addSourceBuffer(mimeType);
+      const channel = new MessageChannel();
+      const swTarget = navigator.serviceWorker.controller || (await navigator.serviceWorker.ready).active;
 
-        let chunkIndex = 0;
-        let isReading = false;
-        const TARGET_BUFFER_AHEAD = 15; // Buffer up to 15 seconds ahead
-
-        async function feedBuffer() {
-          // Guard: stop if finished, SourceBuffer is busy, or media source closed
-          if (ms.readyState !== 'open' || sb.updating || isReading) return;
-          if (chunkIndex >= manifest.chunks.length) {
-            if (!sb.updating && ms.readyState === 'open') {
-              try { ms.endOfStream(); } catch (_) {}
-            }
-            return;
-          }
-
-          // Check how many seconds are currently buffered ahead of the playhead
-          const currentTime = player.currentTime;
-          let bufferedEnd = 0;
-          for (let i = 0; i < sb.buffered.length; i++) {
-            if (sb.buffered.start(i) <= currentTime && currentTime <= sb.buffered.end(i)) {
-              bufferedEnd = sb.buffered.end(i);
-              break;
-            }
-          }
-
-          const bufferLead = bufferedEnd - currentTime;
-
-          // If we have enough ahead (and this isn't the initial chunk), yield
-          if (chunkIndex > 0 && bufferLead > TARGET_BUFFER_AHEAD) {
-            return;
-          }
-
-          try {
-            isReading = true;
-            const chunkName = manifest.chunks[chunkIndex];
-            const entry = files[chunkName];
-            if (!entry) throw new Error(`Missing chunk file: ${chunkName}`);
-
-            const decryptedChunk = await readChunk(file, entry);
-            chunkIndex++;
-            sb.appendBuffer(decryptedChunk);
-          } catch (err) {
-            log(`Streaming Error: ${err.message}`);
-          } finally {
-            isReading = false;
-          }
+      swTarget.postMessage({
+        type: 'INIT_ARCHIVE',
+        payload: {
+          file,
+          chunksMap,
+          totalSize: runningOffset,
+          mime: manifest.mime || 'video/mp4'
         }
+      }, [channel.port2]);
 
-        // Trigger next chunk when buffer finishes appending
-        sb.addEventListener('updateend', feedBuffer);
+      channel.port1.onmessage = () => {
+        // Points to the virtual route inside the current GitHub Pages directory
+        player.src = `./stream-virtual-video.mp4?v=${Date.now()}`;
+        card.style.display = 'none';
+        container.style.display = 'block';
 
-        // Periodically verify buffer depth during playback to fetch new chunks
-        player.addEventListener('timeupdate', feedBuffer);
-        player.addEventListener('waiting', feedBuffer);
-
-        // Kickstart the first chunk
-        feedBuffer();
-      });
-
-      card.style.display = 'none';
-      container.style.display = 'block';
-      player.play().catch(() => {});
+        if (container.requestFullscreen) container.requestFullscreen().catch(() => {});
+        player.play().catch(e => log("Autoplay blocked, tap to play."));
+      };
 
     } catch (err) {
       log("ERROR: " + err.message);
