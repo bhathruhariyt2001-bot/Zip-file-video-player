@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Jbh Video Player</title>
+  <style>
+    :root {
+      --primary: #ff0033;
+      --bg: #000000;
+      --ctrl-bg: rgba(15, 15, 15, 0.85);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    html, body {
+      background: var(--bg);
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* INITIAL FILE SELECT SCREEN */
+    #selectModal {
+      position: absolute;
+      z-index: 100;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      background: #111827;
+      padding: 32px 40px;
+      border-radius: 16px;
+      border: 1px solid #1f2937;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.8);
+      text-align: center;
+    }
+    #selectModal h2 { font-size: 1.2rem; font-weight: 600; color: #f3f4f6; }
+    .select-btn {
+      background: #2563eb;
+      color: #fff;
+      font-weight: 600;
+      padding: 12px 24px;
+      border-radius: 24px;
+      cursor: pointer;
+      font-size: 0.95rem;
+      border: none;
+      transition: background 0.2s;
+    }
+    .select-btn:hover { background: #1d4ed8; }
+    input[type="file"] { display: none; }
+
+    /* FULLSCREEN PLAYER CONTAINER */
+    #playerContainer {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #000;
+      overflow: hidden;
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+
+    /* YOUTUBE-STYLE CONTROL OVERLAYS */
+    .controls-overlay {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: linear-gradient(180deg, rgba(0,0,0,0.6) 0%, transparent 20%, transparent 80%, rgba(0,0,0,0.85) 100%);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 16px 24px;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+      pointer-events: none;
+    }
+    .controls-overlay.active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    /* TOP BAR */
+    .top-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 1rem;
+      font-weight: 500;
+    }
+    .title-text {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 60vw;
+    }
+
+    /* BOTTOM CONTROLS */
+    .bottom-bar {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .progress-slider {
+      -webkit-appearance: none;
+      width: 100%;
+      height: 4px;
+      border-radius: 2px;
+      background: rgba(255, 255, 255, 0.3);
+      outline: none;
+      cursor: pointer;
+      transition: height 0.1s;
+    }
+    .progress-slider:hover { height: 7px; }
+    .progress-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 13px;
+      height: 13px;
+      border-radius: 50%;
+      background: var(--primary);
+      cursor: pointer;
+    }
+
+    .btn-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .left-btns, .right-btns {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .icon-btn {
+      background: none;
+      border: none;
+      color: #fff;
+      font-size: 1.15rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0.9;
+      transition: transform 0.1s, opacity 0.1s;
+    }
+    .icon-btn:hover { opacity: 1; transform: scale(1.1); }
+    .time-badge { font-size: 0.82rem; color: #d1d5db; font-family: monospace; }
+
+    /* SPEED DROPDOWN */
+    .speed-select {
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      color: #fff;
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-size: 0.75rem;
+      outline: none;
+      cursor: pointer;
+    }
+    .speed-select option { background: #111; color: #fff; }
+
+    /* DOUBLE TAP SEEK RIPPLE */
+    .seek-ripple {
+      position: absolute;
+      top: 0; bottom: 0; width: 40%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: rgba(255, 255, 255, 0.85);
+      background: rgba(255, 255, 255, 0.08);
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.25s;
+    }
+    #rippleLeft { left: 0; border-radius: 0 50% 50% 0; }
+    #rippleRight { right: 0; border-radius: 50% 0 0 50%; }
+    .ripple-active { opacity: 1 !important; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js"></script>
+</head>
+<body>
+
+<!-- 1. Selection screen -->
+<div id="selectModal">
+  <h2>Select Scrambled Video .ZIP</h2>
+  <label class="select-btn">
+    Pick .ZIP File
+    <input type="file" id="zipInput" accept=".zip" />
+  </label>
+</div>
+
+<!-- 2. Fullscreen Video Engine -->
+<div id="playerContainer">
+  <video id="videoElement" playsinline></video>
+
+  <!-- Left/Right Tap feedback -->
+  <div class="seek-ripple" id="rippleLeft">-10s</div>
+  <div class="seek-ripple" id="rippleRight">+10s</div>
+
+  <!-- YouTube-Style Overlay -->
+  <div class="controls-overlay" id="controls">
+    <div class="top-bar">
+      <span class="title-text" id="videoTitle">Playing Stream</span>
+      <button class="icon-btn" id="pipBtn" title="Picture in Picture">🗗</button>
+    </div>
+
+    <div class="bottom-bar">
+      <input type="range" class="progress-slider" id="seekBar" value="0" min="0" max="100" step="0.1" />
+
+      <div class="btn-row">
+        <div class="left-btns">
+          <button class="icon-btn" id="playBtn">▶</button>
+          <button class="icon-btn" id="rewindBtn" title="Back 10s">↺ 10s</button>
+          <button class="icon-btn" id="forwardBtn" title="Forward 10s">↻ 10s</button>
+          <span class="time-badge" id="timeDisplay">0:00 / 0:00</span>
+        </div>
+
+        <div class="right-btns">
+          <select class="speed-select" id="speedSelect">
+            <option value="0.5">0.5x</option>
+            <option value="1" selected>1.0x</option>
+            <option value="1.25">1.25x</option>
+            <option value="1.5">1.5x</option>
+            <option value="2">2.0x</option>
+          </select>
+          <button class="icon-btn" id="fitBtn" title="Toggle Fit/Cover">⛶</button>
+          <button class="icon-btn" id="fsBtn" title="Fullscreen">⛶</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const XOR_KEY = 0xAA;
+  const selectModal = document.getElementById('selectModal');
+  const zipInput = document.getElementById('zipInput');
+  const playerContainer = document.getElementById('playerContainer');
+  const video = document.getElementById('videoElement');
+  const controls = document.getElementById('controls');
+  const playBtn = document.getElementById('playBtn');
+  const seekBar = document.getElementById('seekBar');
+  const timeDisplay = document.getElementById('timeDisplay');
+  const videoTitle = document.getElementById('videoTitle');
+  const speedSelect = document.getElementById('speedSelect');
+  const fsBtn = document.getElementById('fsBtn');
+  const fitBtn = document.getElementById('fitBtn');
+  const pipBtn = document.getElementById('pipBtn');
+  const rewindBtn = document.getElementById('rewindBtn');
+  const forwardBtn = document.getElementById('forwardBtn');
+  const rippleLeft = document.getElementById('rippleLeft');
+  const rippleRight = document.getElementById('rippleRight');
+
+  let hideTimeout;
+
+  // --- AUTOMATIC FULLSCREEN PLAYBACK ---
+  zipInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    selectModal.style.display = 'none';
+
+    // Auto-enter native fullscreen
+    if (playerContainer.requestFullscreen) {
+      playerContainer.requestFullscreen().catch(() => {});
+    } else if (playerContainer.webkitRequestFullscreen) {
+      playerContainer.webkitRequestFullscreen();
+    }
+
+    // Stream-unpack without high RAM usage
+    const buffer = new Uint8Array(await file.arrayBuffer());
+
+    fflate.unzip(buffer, (err, unzipped) => {
+      if (err || !unzipped['manifest.json']) {
+        alert('Invalid or corrupted scrambled .ZIP');
+        selectModal.style.display = 'flex';
+        return;
+      }
+
+      const manifest = JSON.parse(fflate.strFromU8(unzipped['manifest.json']));
+      videoTitle.innerText = manifest.name;
+
+      const restoredParts = [];
+      for (const name of manifest.chunks) {
+        const raw = unzipped[name];
+        if (!raw) continue;
+        for (let b = 0; b < raw.length; b++) raw[b] ^= XOR_KEY;
+        restoredParts.push(raw);
+        delete unzipped[name];
+      }
+
+      const blob = new Blob(restoredParts, { type: manifest.mime });
+      video.src = URL.createObjectURL(blob);
+      video.play();
+      resetControlsTimer();
+    });
+  });
+
+  // --- PLAYER ENGINE CONTROLS ---
+  function togglePlay() {
+    if (video.paused) {
+      video.play();
+      playBtn.innerText = '⏸';
+    } else {
+      video.pause();
+      playBtn.innerText = '▶';
+    }
+    resetControlsTimer();
+  }
+  playBtn.onclick = togglePlay;
+  video.onclick = togglePlay;
+
+  video.ontimeupdate = () => {
+    if (!video.duration) return;
+    seekBar.value = (video.currentTime / video.duration) * 100;
+    timeDisplay.innerText = `${fmt(video.currentTime)} / ${fmt(video.duration)}`;
+  };
+
+  seekBar.oninput = () => {
+    video.currentTime = (seekBar.value / 100) * video.duration;
+  };
+
+  rewindBtn.onclick = () => seekRelative(-10);
+  forwardBtn.onclick = () => seekRelative(10);
+
+  function seekRelative(sec) {
+    video.currentTime = Math.max(0, Math.min(video.currentTime + sec, video.duration));
+    const ripple = sec < 0 ? rippleLeft : rippleRight;
+    ripple.classList.add('ripple-active');
+    setTimeout(() => ripple.classList.remove('ripple-active'), 400);
+    resetControlsTimer();
+  }
+
+  // Double-click/tap left or right half to skip
+  playerContainer.ondblclick = (e) => {
+    const rect = playerContainer.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    if (clickX < rect.width / 2) seekRelative(-10);
+    else seekRelative(10);
+  };
+
+  speedSelect.onchange = () => video.playbackRate = parseFloat(speedSelect.value);
+
+  // Toggle Aspect Fill/Fit
+  let isCover = false;
+  fitBtn.onclick = () => {
+    isCover = !isCover;
+    video.style.objectFit = isCover ? 'cover' : 'contain';
+  };
+
+  // PiP (Picture in Picture)
+  pipBtn.onclick = async () => {
+    if (document.pictureInPictureElement) document.exitPictureInPicture();
+    else if (video.requestPictureInPicture) await video.requestPictureInPicture();
+  };
+
+  // Fullscreen button
+  fsBtn.onclick = () => {
+    if (!document.fullscreenElement) {
+      playerContainer.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen();
+    }
+  };
+
+  // --- AUTO HIDE CONTROLS (YOUTUBE BEHAVIOR) ---
+  function resetControlsTimer() {
+    controls.classList.add('active');
+    clearTimeout(hideTimeout);
+    if (!video.paused) {
+      hideTimeout = setTimeout(() => controls.classList.remove('active'), 3000);
+    }
+  }
+  playerContainer.onmousemove = resetControlsTimer;
+  playerContainer.ontouchstart = resetControlsTimer;
+
+  // --- KEYBOARD SHORTCUTS (VLC STYLE) ---
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
+    if (e.code === 'ArrowRight') seekRelative(10);
+    if (e.code === 'ArrowLeft') seekRelative(-10);
+    if (e.code === 'ArrowUp') video.volume = Math.min(1, video.volume + 0.1);
+    if (e.code === 'ArrowDown') video.volume = Math.max(0, video.volume - 0.1);
+    if (e.key.toLowerCase() === 'f') fsBtn.click();
+    if (e.key.toLowerCase() === 'm') video.muted = !video.muted;
+  });
+
+  function fmt(s) {
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return `${m}:${sec < 10 ? '0' : ''}${sec}`;
+  }
+</script>
+</body>
+  </html>
+  
