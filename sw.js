@@ -14,8 +14,8 @@ function openDB() {
         db.createObjectStore(STORE_NAME);
       }
     };
-    req.onsuccess = (e) => resolve(e.target.result);
-    req.onerror = (e) => reject(e.target.error);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
   });
 }
 
@@ -33,7 +33,6 @@ function getStoredMeta() {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Intercept the virtual video stream URL
   if (!url.pathname.endsWith('/virtual-stream.mp4')) {
     return;
   }
@@ -41,7 +40,7 @@ self.addEventListener('fetch', (event) => {
   event.respondWith((async () => {
     const meta = await getStoredMeta();
     if (!meta) {
-      return new Response('No active stream metadata found in storage', { status: 404 });
+      return new Response('No stream metadata found in local storage', { status: 404 });
     }
 
     const { file, chunksMap, totalSize, mime } = meta;
@@ -65,17 +64,15 @@ self.addEventListener('fetch', (event) => {
       });
     }
 
-    // Serve a bounded 2MB slice per range request so RAM is strictly capped at ~2MB
-    const MAX_RANGE_BLOCK = 2 * 1024 * 1024;
-    end = Math.min(end, start + MAX_RANGE_BLOCK - 1);
+    // Serve a bounded 2MB slice per request so RAM is strictly locked <10MB
+    const MAX_BLOCK = 2 * 1024 * 1024;
+    end = Math.min(end, start + MAX_BLOCK - 1);
     const contentLength = (end - start) + 1;
 
-    // Stream on-demand chunks directly from disk
     const stream = new ReadableStream({
       async start(controller) {
         let currentPos = start;
 
-        // Binary search / find the starting chunk in the map
         let cIdx = 0;
         while (cIdx < chunksMap.length && (chunksMap[cIdx].startOffset + chunksMap[cIdx].size) <= currentPos) {
           cIdx++;
@@ -87,7 +84,6 @@ self.addEventListener('fetch', (event) => {
           const chunkRem = item.size - chunkInPos;
           const toRead = Math.min(chunkRem, (end - currentPos) + 1);
 
-          // Read only the requested slice directly from the ZIP file on disk
           const sliceStart = item.dataOffset + chunkInPos;
           const raw = await file.slice(sliceStart, sliceStart + toRead).arrayBuffer();
 
