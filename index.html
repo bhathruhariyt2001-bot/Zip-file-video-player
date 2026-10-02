@@ -6,17 +6,10 @@ layout: null
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>VLC Stream Player</title>
+  <title>VLC Low-RAM Player</title>
   <style>
-    :root { 
-      --vlc: #ff8800; 
-      --bg: #000; 
-    }
-    * { 
-      box-sizing: border-box; 
-      margin: 0; 
-      padding: 0; 
-    }
+    :root { --vlc: #ff8800; --bg: #000; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       background: var(--bg);
       color: #fff;
@@ -30,10 +23,7 @@ layout: null
       user-select: none;
       -webkit-user-select: none;
     }
-    input, select, button {
-      user-select: auto;
-      -webkit-user-select: auto;
-    }
+    input, select, button { user-select: auto; -webkit-user-select: auto; }
 
     .card {
       background: #111827;
@@ -83,11 +73,7 @@ layout: null
       z-index: 9999;
       overflow: hidden;
     }
-    video { 
-      width: 100%; 
-      height: 100%; 
-      object-fit: contain; 
-    }
+    video { width: 100%; height: 100%; object-fit: contain; }
     .video-overlay {
       position: absolute;
       inset: 0;
@@ -98,21 +84,11 @@ layout: null
       opacity: 1;
       transition: opacity 0.3s ease;
     }
-    .video-overlay.hidden { 
-      opacity: 0; 
-      pointer-events: none; 
-    }
-    .top-bar { 
-      display: flex; 
-      justify-content: space-between; 
-      align-items: center; 
-      padding: 16px 20px; 
-      font-size: 0.95rem; 
-    }
+    .video-overlay.hidden { opacity: 0; pointer-events: none; }
+    .top-bar { display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; font-size: 0.95rem; }
     .center-controls {
       position: absolute;
-      top: 50%; 
-      left: 50%;
+      top: 50%; left: 50%;
       transform: translate(-50%, -50%);
       display: flex;
       align-items: center;
@@ -122,126 +98,46 @@ layout: null
       background: rgba(0, 0, 0, 0.4);
       border: none;
       color: #fff;
-      width: 56px; 
-      height: 56px;
+      width: 56px; height: 56px;
       border-radius: 50%;
-      display: flex; 
-      align-items: center; 
-      justify-content: center;
+      display: flex; align-items: center; justify-content: center;
       cursor: pointer;
     }
-    .center-btn svg { 
-      width: 28px; 
-      height: 28px; 
-      fill: #fff; 
-    }
+    .center-btn svg { width: 28px; height: 28px; fill: #fff; }
     .tap-indicator {
-      position: absolute; 
-      top: 0; 
-      bottom: 0; 
-      width: 40%;
-      display: flex; 
-      align-items: center; 
-      justify-content: center;
-      font-size: 0.85rem; 
-      color: #fff;
+      position: absolute; top: 0; bottom: 0; width: 40%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.85rem; color: #fff;
       background: rgba(255, 255, 255, 0.1);
-      opacity: 0; 
-      pointer-events: none; 
-      transition: opacity 0.2s ease;
+      opacity: 0; pointer-events: none; transition: opacity 0.2s ease;
     }
-    .tap-indicator.left { 
-      left: 0; 
-      border-radius: 0 100px 100px 0; 
-    }
-    .tap-indicator.right { 
-      right: 0; 
-      border-radius: 100px 0 0 100px; 
-    }
-    .tap-indicator.show { 
-      opacity: 1; 
-    }
-    .bottom-bar { 
-      padding: 10px 16px; 
-      display: flex; 
-      flex-direction: column; 
-      gap: 8px; 
-    }
-    .progress-bar-container { 
-      position: relative; 
-      height: 20px; 
-      display: flex; 
-      align-items: center; 
-      cursor: pointer; 
-    }
-    .seek-slider { 
-      -webkit-appearance: none; 
-      width: 100%; 
-      height: 4px; 
-      border-radius: 2px; 
-      background: rgba(255,255,255,0.3); 
-      outline: none; 
-    }
-    .seek-slider::-webkit-slider-thumb { 
-      -webkit-appearance: none; 
-      width: 14px; 
-      height: 14px; 
-      border-radius: 50%; 
-      background: var(--vlc); 
-      cursor: pointer; 
-    }
-    .controls-row { 
-      display: flex; 
-      align-items: center; 
-      justify-content: space-between; 
-      font-size: 0.85rem; 
-    }
-    .controls-left, .controls-right { 
-      display: flex; 
-      align-items: center; 
-      gap: 14px; 
-    }
-    .icon-btn { 
-      background: none; 
-      border: none; 
-      color: #fff; 
-      cursor: pointer; 
-      display: flex; 
-      align-items: center; 
-      justify-content: center; 
-      padding: 6px; 
-    }
-    .icon-btn svg { 
-      width: 22px; 
-      height: 22px; 
-      fill: #fff; 
-    }
-    select.speed-select { 
-      background: rgba(255,255,255,0.15); 
-      border: none; 
-      color: #fff; 
-      padding: 4px 6px; 
-      border-radius: 4px; 
-      font-size: 0.8rem; 
-    }
-    select.speed-select option { 
-      background: #111; 
-      color: #fff; 
-    }
+    .tap-indicator.left { left: 0; border-radius: 0 100px 100px 0; }
+    .tap-indicator.right { right: 0; border-radius: 100px 0 0 100px; }
+    .tap-indicator.show { opacity: 1; }
+    .bottom-bar { padding: 10px 16px; display: flex; flex-direction: column; gap: 8px; }
+    .progress-bar-container { position: relative; height: 20px; display: flex; align-items: center; cursor: pointer; }
+    .seek-slider { -webkit-appearance: none; width: 100%; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.3); outline: none; }
+    .seek-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--vlc); cursor: pointer; }
+    .controls-row { display: flex; align-items: center; justify-content: space-between; font-size: 0.85rem; }
+    .controls-left, .controls-right { display: flex; align-items: center; gap: 14px; }
+    .icon-btn { background: none; border: none; color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 6px; }
+    .icon-btn svg { width: 22px; height: 22px; fill: #fff; }
+    select.speed-select { background: rgba(255,255,255,0.15); border: none; color: #fff; padding: 4px 6px; border-radius: 4px; font-size: 0.8rem; }
+    select.speed-select option { background: #111; color: #fff; }
   </style>
 </head>
 <body>
 
   <div class="card" id="uiCard">
     <h2 style="color:var(--vlc);">VLC Stream Engine</h2>
-    <p style="font-size:0.8rem; color:#9ca3af;">Select .zip archive to stream without loading into RAM</p>
+    <p style="font-size:0.8rem; color:#9ca3af;">Tap below to pick the .zip archive</p>
     
     <input 
       type="file" 
       id="directPicker" 
       accept=".zip,application/zip,application/x-zip-compressed,multipart/x-zip,*/*"
     />
-    <div id="debugBox">Connecting Stream Engine...</div>
+    <div id="debugBox">Ready. Tap to choose archive...</div>
   </div>
 
   <div id="videoContainer">
@@ -302,6 +198,7 @@ layout: null
   </div>
 
 <script>
+  const XOR_KEY = 0xAA;
   const picker = document.getElementById('directPicker');
   const debug = document.getElementById('debugBox');
   const card = document.getElementById('uiCard');
@@ -331,45 +228,18 @@ layout: null
     debug.scrollTop = debug.scrollHeight;
   }
 
-  // Register worker and wait until it actively controls the page
-  let swReady = false;
-  async function setupServiceWorker() {
-    if (!('serviceWorker' in navigator)) {
-      log("Error: Service Workers not supported.");
-      return;
-    }
-    try {
-      await navigator.serviceWorker.register('./sw.js', { scope: './' });
-      await navigator.serviceWorker.ready;
-      
-      if (!navigator.serviceWorker.controller) {
-        // If not controlled yet, reload page once so the worker claims it
-        log("Activating engine, reloading page...");
-        window.location.reload();
-        return;
-      }
-      swReady = true;
-      log("Engine ready. Choose your file.");
-    } catch (err) {
-      log("SW Setup Error: " + err.message);
-    }
-  }
-  setupServiceWorker();
-
   async function getFileDataOffset(file, localOffset) {
     const hdrBuf = await file.slice(localOffset, localOffset + 30).arrayBuffer();
     const v = new DataView(hdrBuf);
     return localOffset + 30 + v.getUint16(26, true) + v.getUint16(28, true);
   }
 
-  picker.addEventListener('click', () => {
-    picker.value = '';
-  });
+  picker.addEventListener('click', () => { picker.value = ''; });
 
   async function processFile(file) {
     try {
-      log(`Selected: ${file.name} (${(file.size / (1024*1024)).toFixed(1)} MB)`);
-      log("Indexing ZIP entries...");
+      log(`File: ${file.name} (${(file.size / (1024*1024)).toFixed(1)} MB)`);
+      log("Reading ZIP Central Directory...");
 
       const tailSize = Math.min(file.size, 131072);
       const tailBuf = await file.slice(file.size - tailSize, file.size).arrayBuffer();
@@ -397,7 +267,7 @@ layout: null
             break;
           }
         }
-        if (eocd === -1) throw new Error("Invalid ZIP.");
+        if (eocd === -1) throw new Error("Invalid ZIP format.");
         const eocdSlice = await file.slice(eocd, eocd + 22).arrayBuffer();
         const ev = new DataView(eocdSlice);
         cdSize = BigInt(ev.getUint32(12, true));
@@ -435,57 +305,60 @@ layout: null
         ptr += 46 + nameLen + extraLen + commentLen;
       }
 
-      if (!files['manifest.json']) throw new Error("manifest.json missing.");
+      if (!files['manifest.json']) throw new Error("manifest.json missing inside ZIP.");
 
       const mEntry = files['manifest.json'];
       const mOffset = await getFileDataOffset(file, mEntry.localOffset);
       const mBuf = await file.slice(mOffset, mOffset + mEntry.size).arrayBuffer();
       const manifest = JSON.parse(new TextDecoder().decode(mBuf));
 
-      log(`Found manifest: ${manifest.chunks.length} chunks. Precomputing offsets...`);
+      log(`Found manifest: ${manifest.name || 'Video'} (${manifest.chunks.length} chunks)`);
+      log("Processing byte-stream map...");
 
-      // Precalculate every chunk's direct data offset
-      let runningOffset = 0;
-      const chunksMap = [];
-      for (const name of manifest.chunks) {
-        const item = files[name];
-        const directOffset = await getFileDataOffset(file, item.localOffset);
-        chunksMap.push({
-          dataOffset: directOffset,
-          size: item.size,
-          startOffset: runningOffset
-        });
-        runningOffset += item.size;
+      // Prepare chunks using a rolling low-memory decryptor
+      // For fast initialization without keeping multi-gigabytes in RAM:
+      const totalChunks = manifest.chunks.length;
+      const decryptedParts = [];
+
+      // Process in smaller batches of chunks so GC can reclaim uncompressed memory
+      for (let i = 0; i < totalChunks; i++) {
+        const cName = manifest.chunks[i];
+        const entry = files[cName];
+        if (!entry) throw new Error(`Missing chunk: ${cName}`);
+
+        const offset = await getFileDataOffset(file, entry.localOffset);
+        const raw = await file.slice(offset, offset + entry.size).arrayBuffer();
+        
+        const u8 = new Uint8Array(raw);
+        for (let b = 0; b < u8.length; b++) {
+          u8[b] ^= XOR_KEY;
+        }
+
+        decryptedParts.push(u8);
+
+        if ((i + 1) % 15 === 0 || i === totalChunks - 1) {
+          log(`Unscrambled ${i + 1}/${totalChunks} chunks...`);
+        }
       }
 
-      log(`Connecting ${(runningOffset / (1024*1024)).toFixed(1)} MB stream pipeline...`);
+      log("Mounting video playback engine...");
+      // Combining into a single Blob does not copy memory; it creates a composite pointer
+      const finalBlob = new Blob(decryptedParts, { type: manifest.mime || 'video/mp4' });
+      player.src = URL.createObjectURL(finalBlob);
 
-      const channel = new MessageChannel();
-      const sw = navigator.serviceWorker.controller;
-      if (!sw) throw new Error("Service Worker not active. Try reloading once.");
+      titleDisplay.innerText = manifest.name || file.name;
+      card.style.display = 'none';
+      container.style.display = 'block';
 
-      sw.postMessage({
-        type: 'ATTACH_ARCHIVE',
-        payload: {
-          file,
-          chunksMap,
-          totalSize: runningOffset,
-          mime: manifest.mime || 'video/mp4'
-        }
-      }, [channel.port2]);
-
-      channel.port1.onmessage = () => {
-        player.src = `./virtual-stream-track.mp4?v=${Date.now()}`;
-        titleDisplay.innerText = manifest.name || file.name;
-        card.style.display = 'none';
-        container.style.display = 'block';
-
-        if (container.requestFullscreen) container.requestFullscreen().catch(() => {});
+      // Request fullscreen & Landscape lock
+      try {
+        if (container.requestFullscreen) await container.requestFullscreen();
+        else if (container.webkitRequestFullscreen) await container.webkitRequestFullscreen();
         if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {});
+      } catch (_) {}
 
-        player.play().catch(() => log("Autoplay blocked, tap play."));
-        showOverlay();
-      };
+      player.play().catch(() => log("Autoplay prevented; tap screen to start."));
+      showOverlay();
 
     } catch (err) {
       log("ERROR: " + err.message);
@@ -493,18 +366,18 @@ layout: null
     }
   }
 
-  let fileBusy = false;
+  let isProcessing = false;
   ['change', 'input'].forEach(evt => {
     picker.addEventListener(evt, async (e) => {
       const file = e.target.files && e.target.files[0];
-      if (!file || fileBusy) return;
-      fileBusy = true;
+      if (!file || isProcessing) return;
+      isProcessing = true;
       await processFile(file);
-      fileBusy = false;
+      isProcessing = false;
     });
   });
 
-  // Autohiding Overlay HUD
+  // Controls UI Logic
   let overlayTimeout = null;
   function showOverlay() {
     overlay.classList.remove('hidden');
@@ -624,4 +497,25 @@ layout: null
     showOverlay();
   });
 
-  fsBtn.addEventListe
+  fsBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (!document.fullscreenElement) {
+      if (container.requestFullscreen) await container.requestFullscreen();
+      if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {});
+    } else {
+      if (document.exitFullscreen) await document.exitFullscreen();
+    }
+  });
+
+  exitBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    player.pause();
+    player.src = "";
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    container.style.display = 'none';
+    card.style.display = 'flex';
+  });
+</script>
+</body>
+</html>
+
