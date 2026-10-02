@@ -6,12 +6,11 @@ layout: null
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Jbh Stream Player</title>
+  <title>VLC Stream Player</title>
   <style>
     :root { 
       --vlc: #ff8800; 
-      --bg: #000;
-      --control-bg: rgba(0, 0, 0, 0.7);
+      --bg: #000; 
     }
     * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; }
     body {
@@ -25,7 +24,6 @@ layout: null
       justify-content: center;
       overflow: hidden;
     }
-
     .card {
       background: #111827;
       border: 1px solid #1f2937;
@@ -63,8 +61,6 @@ layout: null
       white-space: pre-wrap;
       word-break: break-all;
     }
-
-    /* Video Player Shell */
     #videoContainer {
       display: none;
       position: fixed;
@@ -80,8 +76,6 @@ layout: null
       height: 100%;
       object-fit: contain;
     }
-
-    /* YouTube Style Overlay UI */
     .video-overlay {
       position: absolute;
       inset: 0;
@@ -97,8 +91,6 @@ layout: null
       opacity: 0;
       pointer-events: none;
     }
-
-    /* Top Bar */
     .top-bar {
       display: flex;
       justify-content: space-between;
@@ -107,8 +99,6 @@ layout: null
       font-size: 0.95rem;
       font-weight: 500;
     }
-
-    /* Center Play/Pause / Tap Feedback */
     .center-controls {
       position: absolute;
       top: 50%;
@@ -132,8 +122,6 @@ layout: null
       backdrop-filter: blur(4px);
     }
     .center-btn svg { width: 28px; height: 28px; fill: #fff; }
-
-    /* Ripple Indicator for Double Tap */
     .tap-indicator {
       position: absolute;
       top: 0;
@@ -153,16 +141,12 @@ layout: null
     .tap-indicator.left { left: 0; border-radius: 0 100px 100px 0; }
     .tap-indicator.right { right: 0; border-radius: 100px 0 0 100px; }
     .tap-indicator.show { opacity: 1; }
-
-    /* Bottom Control Bar */
     .bottom-bar {
       padding: 10px 16px;
       display: flex;
       flex-direction: column;
       gap: 8px;
     }
-
-    /* Seek Slider */
     .progress-bar-container {
       position: relative;
       height: 20px;
@@ -177,9 +161,7 @@ layout: null
       border-radius: 2px;
       background: rgba(255,255,255,0.3);
       outline: none;
-      transition: height 0.15s ease;
     }
-    .progress-bar-container:hover .seek-slider { height: 6px; }
     .seek-slider::-webkit-slider-thumb {
       -webkit-appearance: none;
       width: 14px;
@@ -188,7 +170,6 @@ layout: null
       background: var(--vlc);
       cursor: pointer;
     }
-
     .controls-row {
       display: flex;
       align-items: center;
@@ -212,9 +193,7 @@ layout: null
       padding: 6px;
       border-radius: 6px;
     }
-    .icon-btn:hover { background: rgba(255,255,255,0.1); }
     .icon-btn svg { width: 22px; height: 22px; fill: #fff; }
-
     select.speed-select {
       background: rgba(255,255,255,0.15);
       border: none;
@@ -231,20 +210,18 @@ layout: null
 
   <div class="card" id="uiCard">
     <h2 style="color:var(--vlc);">VLC Stream Engine</h2>
-    <p style="font-size:0.8rem; color:#9ca3af;">Select scrambled .zip archive (supports 10GB+ streams).</p>
+    <p style="font-size:0.8rem; color:#9ca3af;">Select scrambled .zip archive (up to 10GB+)</p>
     
     <input type="file" id="directPicker" />
-    <div id="debugBox">Initializing worker engine...</div>
+    <div id="debugBox">Ready. Choose a file to start...</div>
   </div>
 
   <div id="videoContainer">
     <video id="player" playsinline></video>
 
-    <!-- Tap Indicators -->
     <div class="tap-indicator left" id="skipLeftFeedback">⏪ 10s</div>
     <div class="tap-indicator right" id="skipRightFeedback">10s ⏩</div>
 
-    <!-- YouTube-style HUD Overlay -->
     <div class="video-overlay" id="overlay">
       <div class="top-bar">
         <span id="titleDisplay">Playing Stream</span>
@@ -297,6 +274,7 @@ layout: null
   </div>
 
 <script>
+  const XOR_KEY = 0xAA;
   const picker = document.getElementById('directPicker');
   const debug = document.getElementById('debugBox');
   const card = document.getElementById('uiCard');
@@ -306,7 +284,6 @@ layout: null
   const titleDisplay = document.getElementById('titleDisplay');
   const exitBtn = document.getElementById('exitBtn');
 
-  // Control Elements
   const mainPlayBtn = document.getElementById('mainPlayBtn');
   const bottomPlayBtn = document.getElementById('bottomPlayBtn');
   const playIcon = document.getElementById('playIcon');
@@ -327,37 +304,19 @@ layout: null
     debug.scrollTop = debug.scrollHeight;
   }
 
-  // Register sw.js
-  async function initWorker() {
-    if (!('serviceWorker' in navigator)) {
-      log("Error: Service Workers not supported.");
-      return;
-    }
-    try {
-      await navigator.serviceWorker.register('./sw.js', { scope: './' });
-      await navigator.serviceWorker.ready;
-      log("Ready: Streaming Engine active.");
-    } catch (err) {
-      log("Worker Init Error: " + err.message);
-    }
-  }
-  initWorker();
-
-  // ZIP Local Header Offset Helper
   async function getFileDataOffset(file, localOffset) {
     const hdrBuf = await file.slice(localOffset, localOffset + 30).arrayBuffer();
     const v = new DataView(hdrBuf);
     return localOffset + 30 + v.getUint16(26, true) + v.getUint16(28, true);
   }
 
-  // File Picker & Indexing
   picker.addEventListener('change', async (e) => {
     try {
       const file = e.target.files && e.target.files[0];
       if (!file) return;
 
-      log(`File: ${file.name} (${(file.size / (1024*1024)).toFixed(1)} MB)`);
-      log("Indexing ZIP entries...");
+      log(`File picked: ${file.name} (${(file.size / (1024*1024)).toFixed(1)} MB)`);
+      log("Parsing ZIP index...");
 
       const tailSize = Math.min(file.size, 131072);
       const tailBuf = await file.slice(file.size - tailSize, file.size).arrayBuffer();
@@ -423,45 +382,60 @@ layout: null
         ptr += 46 + nameLen + extraLen + commentLen;
       }
 
-      if (!files['manifest.json']) throw new Error("manifest.json missing.");
+      if (!files['manifest.json']) throw new Error("manifest.json missing in ZIP.");
 
       const mEntry = files['manifest.json'];
       const mOffset = await getFileDataOffset(file, mEntry.localOffset);
       const mBuf = await file.slice(mOffset, mOffset + mEntry.size).arrayBuffer();
       const manifest = JSON.parse(new TextDecoder().decode(mBuf));
 
-      let runningOffset = 0;
-      const chunksMap = [];
-      for (const name of manifest.chunks) {
-        const item = files[name];
-        chunksMap.push({
-          localOffset: item.localOffset,
-          size: item.size,
-          startOffset: runningOffset
-        });
-        runningOffset += item.size;
+      log(`Found: ${manifest.name || 'Video'} (${manifest.chunks.length} chunks)`);
+      log("Decrypting video chunks directly...");
+
+      // Decrypt chunks in batch without worker overhead
+      const decryptedBlobs = [];
+      const totalChunks = manifest.chunks.length;
+
+      for (let i = 0; i < totalChunks; i++) {
+        const cName = manifest.chunks[i];
+        const entry = files[cName];
+        if (!entry) throw new Error(`Missing chunk: ${cName}`);
+
+        const offset = await getFileDataOffset(file, entry.localOffset);
+        const raw = await file.slice(offset, offset + entry.size).arrayBuffer();
+        const u8 = new Uint8Array(raw);
+        for (let b = 0; b < u8.length; b++) u8[b] ^= XOR_KEY;
+        
+        // Pushing Uint8Array to Blob parts frees internal TypedArray overhead
+        decryptedBlobs.push(u8);
+
+        if ((i + 1) % 15 === 0 || i === totalChunks - 1) {
+          log(`Decrypted ${i + 1}/${totalChunks} chunks...`);
+        }
       }
 
-      log("Mounting virtual stream pipeline...");
+      log("Creating virtual playback buffer...");
+      const finalBlob = new Blob(decryptedBlobs, { type: manifest.mime || 'video/mp4' });
+      player.src = URL.createObjectURL(finalBlob);
+
       titleDisplay.innerText = manifest.name || file.name;
+      card.style.display = 'none';
+      container.style.display = 'block';
 
-      const reg = await navigator.serviceWorker.ready;
-      const swTarget = navigator.serviceWorker.controller || reg.active;
-      const channel = new MessageChannel();
-
-      swTarget.postMessage({
-        type: 'INIT_ARCHIVE',
-        payload: {
-          file,
-          chunksMap,
-          totalSize: runningOffset,
-          mime: manifest.mime || 'video/mp4'
+      // Launch True YouTube Fullscreen
+      try {
+        if (container.requestFullscreen) {
+          await container.requestFullscreen();
+        } else if (container.webkitRequestFullscreen) {
+          await container.webkitRequestFullscreen();
         }
-      }, [channel.port2]);
+        if (screen.orientation && screen.orientation.lock) {
+          await screen.orientation.lock('landscape').catch(() => {});
+        }
+      } catch (_) {}
 
-      channel.port1.onmessage = () => {
-        launchFullscreenPlayer();
-      };
+      player.play().catch(() => log("Tap screen to play."));
+      showOverlay();
 
     } catch (err) {
       log("ERROR: " + err.message);
@@ -469,37 +443,13 @@ layout: null
     }
   });
 
-  // Launch Fullscreen Player & Force Landscape
-  async function launchFullscreenPlayer() {
-    player.src = `./stream-virtual-video.mp4?v=${Date.now()}`;
-    card.style.display = 'none';
-    container.style.display = 'block';
-
-    // Enter fullscreen
-    try {
-      if (container.requestFullscreen) {
-        await container.requestFullscreen();
-      } else if (container.webkitRequestFullscreen) {
-        await container.webkitRequestFullscreen();
-      }
-      if (screen.orientation && screen.orientation.lock) {
-        await screen.orientation.lock('landscape').catch(() => {});
-      }
-    } catch (_) {}
-
-    player.play().catch(() => {});
-    showOverlay();
-  }
-
-  // YouTube Overlay Autohide Timer
+  // Autohiding Overlay HUD
   let overlayTimeout = null;
   function showOverlay() {
     overlay.classList.remove('hidden');
     clearTimeout(overlayTimeout);
     if (!player.paused) {
-      overlayTimeout = setTimeout(() => {
-        overlay.classList.add('hidden');
-      }, 3000);
+      overlayTimeout = setTimeout(() => overlay.classList.add('hidden'), 3000);
     }
   }
 
@@ -511,13 +461,9 @@ layout: null
     }
   }
 
-  // Play / Pause Logic
   function togglePlay() {
-    if (player.paused) {
-      player.play();
-    } else {
-      player.pause();
-    }
+    if (player.paused) player.play();
+    else player.pause();
     showOverlay();
   }
 
@@ -534,18 +480,13 @@ layout: null
   player.addEventListener('play', updatePlayIcons);
   player.addEventListener('pause', updatePlayIcons);
 
-  // Time & Seek Formatting
   function formatTime(sec) {
     if (isNaN(sec)) return "00:00";
     const h = Math.floor(sec / 3600);
     const m = Math.floor((sec % 3600) / 60);
     const s = Math.floor(sec % 60);
     const ss = s < 10 ? '0' + s : s;
-    if (h > 0) {
-      const mm = m < 10 ? '0' + m : m;
-      return `${h}:${mm}:${ss}`;
-    }
-    return `${m}:${ss}`;
+    return h > 0 ? `${h}:${m < 10 ? '0' + m : m}:${ss}` : `${m}:${ss}`;
   }
 
   let isSeeking = false;
@@ -573,7 +514,6 @@ layout: null
     showOverlay();
   });
 
-  // 10s Rewind / Forward Controls
   function seekOffset(offset) {
     player.currentTime = Math.max(0, Math.min(player.duration || 0, player.currentTime + offset));
     showOverlay();
@@ -581,29 +521,27 @@ layout: null
   rwBtn.addEventListener('click', (e) => { e.stopPropagation(); seekOffset(-10); });
   ffBtn.addEventListener('click', (e) => { e.stopPropagation(); seekOffset(10); });
 
-  // YouTube Touch Gestures (Single Tap: Toggle HUD | Double Tap: Skip)
+  // YouTube Touch Gestures (Double Tap to Seek ±10s)
   let lastTapTime = 0;
   let tapTimer = null;
 
   container.addEventListener('click', (e) => {
-    // Ignore clicks on buttons/sliders
     if (e.target.closest('button') || e.target.closest('input') || e.target.closest('select')) {
       return;
     }
 
-    const currentTime = Date.now();
-    const tapLength = currentTime - lastTapTime;
+    const cur = Date.now();
+    const tapLen = cur - lastTapTime;
     const clickX = e.clientX;
-    const screenWidth = window.innerWidth;
+    const w = window.innerWidth;
 
-    if (tapLength < 300 && tapLength > 0) {
-      // Double Tap detected
+    if (tapLen < 300 && tapLen > 0) {
       clearTimeout(tapTimer);
-      if (clickX < screenWidth * 0.4) {
+      if (clickX < w * 0.4) {
         seekOffset(-10);
         skipLeftFeedback.classList.add('show');
         setTimeout(() => skipLeftFeedback.classList.remove('show'), 500);
-      } else if (clickX > screenWidth * 0.6) {
+      } else if (clickX > w * 0.6) {
         seekOffset(10);
         skipRightFeedback.classList.add('show');
         setTimeout(() => skipRightFeedback.classList.remove('show'), 500);
@@ -611,15 +549,12 @@ layout: null
         togglePlay();
       }
     } else {
-      // Single Tap candidate
-      tapTimer = setTimeout(() => {
-        toggleOverlay();
-      }, 300);
+      tapTimer = setTimeout(toggleOverlay, 300);
     }
-    lastTapTime = currentTime;
+    lastTapTime = cur;
   });
 
-  // Volume / Mute
+  // Mute / Unmute
   muteBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     player.muted = !player.muted;
@@ -628,5 +563,31 @@ layout: null
     volIcon.querySelector('path').setAttribute('d', player.muted ? mutePath : unmutePath);
   });
 
-  // Playback Speed
-  spe
+  speedPicker.addEventListener('change', (e) => {
+    e.stopPropagation();
+    player.playbackRate = parseFloat(speedPicker.value);
+    showOverlay();
+  });
+
+  fsBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (!document.fullscreenElement) {
+      if (container.requestFullscreen) await container.requestFullscreen();
+      if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {});
+    } else {
+      if (document.exitFullscreen) await document.exitFullscreen();
+    }
+  });
+
+  exitBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    player.pause();
+    player.src = "";
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    container.style.display = 'none';
+    card.style.display = 'flex';
+  });
+</script>
+</body>
+</html>
+
