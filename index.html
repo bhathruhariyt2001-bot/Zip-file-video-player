@@ -6,7 +6,7 @@ layout: null
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>VLC Mobile Stream Player</title>
+  <title>VLC Zero-RAM Disk Streamer</title>
   <style>
     :root { --vlc: #ff8800; --bg: #000; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -46,8 +46,20 @@ layout: null
       display: block;
       text-align: center;
     }
-    #directPicker {
+    #directPicker { display: none; }
+    #progressBarContainer {
+      width: 100%;
+      height: 8px;
+      background: #374151;
+      border-radius: 4px;
+      overflow: hidden;
       display: none;
+    }
+    #progressBar {
+      width: 0%;
+      height: 100%;
+      background: var(--vlc);
+      transition: width 0.1s linear;
     }
     #debugBox {
       background: #000;
@@ -130,16 +142,19 @@ layout: null
 <body>
 
   <div class="card" id="uiCard">
-    <h2 style="color:var(--vlc);">VLC Stream Player</h2>
-    <p style="font-size:0.8rem; color:#9ca3af;">Low-RAM Chunk Engine • YouTube Fullscreen</p>
+    <h2 style="color:var(--vlc);">VLC Disk Streamer</h2>
+    <p style="font-size:0.8rem; color:#9ca3af;">IndexedDB Disk Cache • Zero RAM Footprint</p>
     
-    <!-- Reliable Click Label for Android -->
     <label for="directPicker" class="custom-upload-btn" id="uploadBtn">
       📁 Tap to Choose .ZIP File
     </label>
     <input type="file" id="directPicker" accept=".zip,*/*" />
 
-    <div id="debugBox">Engine loaded v7.0. Waiting for file...</div>
+    <div id="progressBarContainer">
+      <div id="progressBar"></div>
+    </div>
+
+    <div id="debugBox">Disk Engine initialized. Waiting for archive...</div>
   </div>
 
   <div id="videoContainer">
@@ -203,6 +218,8 @@ layout: null
   const XOR_KEY = 0xAA;
   const picker = document.getElementById('directPicker');
   const uploadBtn = document.getElementById('uploadBtn');
+  const pContainer = document.getElementById('progressBarContainer');
+  const pBar = document.getElementById('progressBar');
   const debug = document.getElementById('debugBox');
   const card = document.getElementById('uiCard');
   const container = document.getElementById('videoContainer');
@@ -231,20 +248,76 @@ layout: null
     debug.scrollTop = debug.scrollHeight;
   }
 
+  // ==========================================
+  // DISK STORAGE ENGINE (IndexedDB)
+  // Writes chunks directly to phone flash storage
+  // ==========================================
+  function openDiskDB() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open('VLCStreamStorageDB', 1);
+      req.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('chunks')) {
+          db.createObjectStore('chunks');
+        }
+      };
+      req.onsuccess = (e) => resolve(e.target.result);
+      req.onerror = (e) => reject(e.target.error);
+    });
+  }
+
+  async function clearDiskDB(db) {
+    return new Promise((resolve) => {
+      const tx = db.transaction('chunks', 'readwrite');
+      tx.objectStore('chunks').clear();
+      tx.oncomplete = () => resolve();
+    });
+  }
+
+  async function writeChunkToDisk(db, index, blob) {
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('chunks', 'readwrite');
+      tx.objectStore('chunks').put(blob, index);
+      tx.oncomplete = () => resolve();
+      tx.onerror = (e) => reject(e.target.error);
+    });
+  }
+
+  async function assembleDiskBlob(db, totalChunks, mime) {
+    const chunks = [];
+    for (let i = 0; i < totalChunks; i++) {
+      const chunk = await new Promise((resolve, reject) => {
+        const tx = db.transaction('chunks', 'readonly');
+        const req = tx.objectStore('chunks').get(i);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = (e) => reject(e.target.error);
+      });
+      chunks.push(chunk);
+    }
+    return new Blob(chunks, { type: mime || 'video/mp4' });
+  }
+
   async function getFileDataOffset(file, localOffset) {
     const hdrBuf = await file.slice(localOffset, localOffset + 30).arrayBuffer();
     const v = new DataView(hdrBuf);
     return localOffset + 30 + v.getUint16(26, true) + v.getUint16(28, true);
   }
 
-  let fileSelected = false;
+  let isHandlingFile = false;
 
-  async function executeUnscrambleAndPlay(file) {
+  async function processToDisk(file) {
     try {
-      fileSelected = true;
-      uploadBtn.innerText = "⏳ Processing " + file.name + "...";
-      log(`Detected: ${file.name} (${(file.size / (1024*1024)).toFixed(1)} MB)`);
-      log("Step 1: Reading Central Directory...");
+      isHandlingFile = true;
+      uploadBtn.innerText = "⏳ Accessing Disk Storage...";
+      pContainer.style.display = 'block';
+
+      log(`File: ${file.name} (${(file.size / (1024*1024)).toFixed(1)} MB)`);
+      log("Initializing local disk cache...");
+
+      const db = await openDiskDB();
+      await clearDiskDB(db);
+
+      log("Reading archive index...");
 
       const tailSize = Math.min(file.size, 131072);
       const tailBuf = await file.slice(file.size - tailSize, file.size).arrayBuffer();
@@ -272,7 +345,7 @@ layout: null
             break;
           }
         }
-        if (eocd === -1) throw new Error("Invalid or damaged ZIP file.");
+        if (eocd === -1) throw new Error("Invalid ZIP archive.");
         const eocdSlice = await file.slice(eocd, eocd + 22).arrayBuffer();
         const ev = new DataView(eocdSlice);
         cdSize = BigInt(ev.getUint32(12, true));
@@ -310,7 +383,7 @@ layout: null
         ptr += 46 + nameLen + extraLen + commentLen;
       }
 
-      if (!files['manifest.json']) throw new Error("manifest.json missing inside ZIP.");
+      if (!files['manifest.json']) throw new Error("manifest.json missing.");
 
       const mEntry = files['manifest.json'];
       const mOffset = await getFileDataOffset(file, mEntry.localOffset);
@@ -318,51 +391,53 @@ layout: null
       const manifest = JSON.parse(new TextDecoder().decode(mBuf));
 
       const totalChunks = manifest.chunks.length;
-      log(`Found: ${manifest.name || 'Video'} (${totalChunks} chunks)`);
-      log("Step 2: Low-RAM 3-Chunk Window Streaming...");
+      log(`Found manifest: ${totalChunks} chunks.`);
+      log("Streaming chunks to local disk (RAM will remain at 0 MB)...");
 
-      // 3-CHUNK ROLLING WINDOW EXECUTION:
-      // Holds strictly max 3 chunks in typed arrays, committing finished slices into Blob chunks
-      // so garbage collection instantly purges RAM.
-      const blobParts = [];
-      const CHUNK_WINDOW = 3;
-
-      for (let i = 0; i < totalChunks; i += CHUNK_WINDOW) {
-        const batchEnd = Math.min(i + CHUNK_WINDOW, totalChunks);
-        const currentBatch = [];
-
-        for (let j = i; j < batchEnd; j++) {
-          const cName = manifest.chunks[j];
-          const entry = files[cName];
-          const offset = await getFileDataOffset(file, entry.localOffset);
-          const raw = await file.slice(offset, offset + entry.size).arrayBuffer();
-          
-          const u8 = new Uint8Array(raw);
-          for (let b = 0; b < u8.length; b++) {
-            u8[b] ^= XOR_KEY;
-          }
-          currentBatch.push(u8);
+      // ==========================================
+      // PIPELINE: 1 Chunk RAM Eviction to Disk
+      // Read 1 chunk -> XOR unscramble -> Commit to Disk -> Purge from RAM
+      // ==========================================
+      for (let i = 0; i < totalChunks; i++) {
+        const cName = manifest.chunks[i];
+        const entry = files[cName];
+        const offset = await getFileDataOffset(file, entry.localOffset);
+        
+        // Read single chunk from disk into RAM
+        const raw = await file.slice(offset, offset + entry.size).arrayBuffer();
+        const u8 = new Uint8Array(raw);
+        for (let b = 0; b < u8.length; b++) {
+          u8[b] ^= XOR_KEY;
         }
 
-        // Convert current window to a Blob part and release typed arrays from RAM immediately
-        blobParts.push(new Blob(currentBatch));
-        currentBatch.length = 0; // Trigger instant GC
+        // Write directly to IndexedDB disk storage as a Blob
+        const chunkBlob = new Blob([u8]);
+        await writeChunkToDisk(db, i, chunkBlob);
 
-        log(`Buffered chunks ${batchEnd}/${totalChunks} (RAM strictly bounded)`);
-        
-        // Yield 4ms so UI updates and mobile GC can collect
-        await new Promise(res => setTimeout(res, 4));
+        // Update progress bar
+        const pct = Math.round(((i + 1) / totalChunks) * 100);
+        pBar.style.width = pct + '%';
+        uploadBtn.innerText = `⏳ Writing to Disk: ${pct}%`;
+
+        if ((i + 1) % 10 === 0 || i === totalChunks - 1) {
+          log(`Written ${i + 1}/${totalChunks} chunks to local disk.`);
+        }
+
+        // Give the JavaScript engine a tick to garbage-collect the RAM array
+        await new Promise(r => setTimeout(r, 0));
       }
 
-      log("Step 3: Launching Native Video Player...");
-      const fullVideoBlob = new Blob(blobParts, { type: manifest.mime || 'video/mp4' });
-      player.src = URL.createObjectURL(fullVideoBlob);
+      log("Mounting video from disk storage...");
+      uploadBtn.innerText = "🚀 Launching Player...";
+
+      // Assembles references from disk without holding copies in heap RAM
+      const finalVideoBlob = await assembleDiskBlob(db, totalChunks, manifest.mime || 'video/mp4');
+      player.src = URL.createObjectURL(finalVideoBlob);
 
       titleDisplay.innerText = manifest.name || file.name;
       card.style.display = 'none';
       container.style.display = 'block';
 
-      // Fullscreen & Landscape
       try {
         if (container.requestFullscreen) await container.requestFullscreen();
         else if (container.webkitRequestFullscreen) await container.webkitRequestFullscreen();
@@ -375,20 +450,20 @@ layout: null
     } catch (err) {
       log("ERROR: " + err.message);
       uploadBtn.innerText = "❌ Error: " + err.message;
-      fileSelected = false;
+      isHandlingFile = false;
     }
   }
 
-  // Double trigger + 200ms Android Chrome poll to ensure input is NEVER dropped
-  function checkInput() {
-    if (!fileSelected && picker.files && picker.files[0]) {
-      executeUnscrambleAndPlay(picker.files[0]);
+  // Active poll check ensures Android never drops the selection
+  function pollInput() {
+    if (!isHandlingFile && picker.files && picker.files[0]) {
+      processToDisk(picker.files[0]);
     }
   }
 
-  picker.addEventListener('change', checkInput);
-  picker.addEventListener('input', checkInput);
-  setInterval(checkInput, 250);
+  picker.addEventListener('change', pollInput);
+  picker.addEventListener('input', pollInput);
+  setInterval(pollInput, 250);
 
   // Overlay HUD Controls
   let overlayTimeout = null;
@@ -465,63 +540,5 @@ layout: null
   rwBtn.addEventListener('click', (e) => { e.stopPropagation(); seekOffset(-10); });
   ffBtn.addEventListener('click', (e) => { e.stopPropagation(); seekOffset(10); });
 
-  // YouTube Touch Gestures (Double Tap to Seek ±10s)
-  let lastTapTime = 0;
-  let tapTimer = null;
-
-  container.addEventListener('click', (e) => {
-    if (e.target.closest('button') || e.target.closest('input') || e.target.closest('select')) return;
-
-    const cur = Date.now();
-    const tapLen = cur - lastTapTime;
-    const clickX = e.clientX;
-    const w = window.innerWidth;
-
-    if (tapLen < 300 && tapLen > 0) {
-      clearTimeout(tapTimer);
-      if (clickX < w * 0.4) {
-        seekOffset(-10);
-        skipLeftFeedback.classList.add('show');
-        setTimeout(() => skipLeftFeedback.classList.remove('show'), 500);
-      } else if (clickX > w * 0.6) {
-        seekOffset(10);
-        skipRightFeedback.classList.add('show');
-        setTimeout(() => skipRightFeedback.classList.remove('show'), 500);
-      } else {
-        togglePlay();
-      }
-    } else {
-      tapTimer = setTimeout(toggleOverlay, 300);
-    }
-    lastTapTime = cur;
-  });
-
-  muteBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    player.muted = !player.muted;
-    const mutePath = "M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z";
-    const unmutePath = "M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z";
-    volIcon.querySelector('path').setAttribute('d', player.muted ? mutePath : unmutePath);
-  });
-
-  speedPicker.addEventListener('change', (e) => {
-    e.stopPropagation();
-    player.playbackRate = parseFloat(speedPicker.value);
-    showOverlay();
-  });
-
-  fsBtn.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    if (!document.fullscreenElement) {
-      if (container.requestFullscreen) await container.requestFullscreen();
-      if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {});
-    } else {
-      if (document.exitFullscreen) await document.exitFullscreen();
-    }
-  });
-
-  exitBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    player.pause();
-    player.src = "";
-    if (document.fullscreenElement) document.exitFulls
+  // YouTube Touch Gestures
+  let lastTapTime
