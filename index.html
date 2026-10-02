@@ -6,7 +6,7 @@ layout: null
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>VLC Player Debug Engine</title>
+  <title>VLC Player Stream Engine (MSE)</title>
   <style>
     :root { --vlc: #ff8800; --bg: #000; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -33,7 +33,6 @@ layout: null
       gap: 16px;
       text-align: center;
     }
-    /* Standard standard input button - impossible for Android to block */
     input[type="file"] {
       width: 100%;
       padding: 12px;
@@ -53,7 +52,7 @@ layout: null
       font-family: monospace;
       font-size: 0.75rem;
       color: #38bdf8;
-      max-height: 140px;
+      max-height: 160px;
       overflow-y: auto;
       white-space: pre-wrap;
       word-break: break-all;
@@ -72,9 +71,8 @@ layout: null
 
   <div class="card" id="uiCard">
     <h2 style="color:var(--vlc);">VLC Stream Player</h2>
-    <p style="font-size:0.8rem; color:#9ca3af;">Tap below to pick the scrambled .zip file.</p>
+    <p style="font-size:0.8rem; color:#9ca3af;">Select scrambled .zip archive to stream via MSE</p>
     
-    <!-- Direct, unstyled native file picker -->
     <input type="file" id="directPicker" />
 
     <div id="debugBox">Status: Waiting for file selection...</div>
@@ -97,16 +95,36 @@ layout: null
     debug.scrollTop = debug.scrollHeight;
   }
 
+  // Helper to resolve exact file payload offset by reading local header
+  async function getFileDataOffset(file, localOffset) {
+    const hdrBuf = await file.slice(localOffset, localOffset + 30).arrayBuffer();
+    const v = new DataView(hdrBuf);
+    if (v.getUint32(0, true) !== 0x04034b50) {
+      throw new Error(`Invalid local header signature at ${localOffset}`);
+    }
+    const nameLen = v.getUint16(26, true);
+    const extraLen = v.getUint16(28, true);
+    return localOffset + 30 + nameLen + extraLen;
+  }
+
+  // Read and decrypt one chunk on demand
+  async function readChunk(file, entry) {
+    const dataOffset = await getFileDataOffset(file, entry.localOffset);
+    const raw = await file.slice(dataOffset, dataOffset + entry.size).arrayBuffer();
+    const u8 = new Uint8Array(raw);
+    for (let i = 0; i < u8.length; i++) {
+      u8[i] ^= XOR_KEY;
+    }
+    return u8;
+  }
+
   picker.addEventListener('change', async (e) => {
     try {
       const file = e.target.files && e.target.files[0];
-      if (!file) {
-        log("No file selected.");
-        return;
-      }
+      if (!file) return;
 
-      log(`File picked: ${file.name} (${(file.size / (1024*1024)).toFixed(1)} MB)`);
-      log("Scanning ZIP End-of-Central-Directory...");
+      log(`File: ${file.name} (${(file.size / (1024*1024)).toFixed(1)} MB)`);
+      log("Scanning Central Directory...");
 
       // 1. Locate EOCD or ZIP64
       const tailSize = Math.min(file.size, 131072);
@@ -144,9 +162,7 @@ layout: null
         cdOffset = BigInt(ev.getUint32(16, true));
       }
 
-      log(`Found Directory: Offset ${cdOffset}, Size ${cdSize} bytes`);
-
-      // 2. Read Central Directory
+      // 2. Read Central Directory Entries
       const cdBuf = await file.slice(Number(cdOffset), Number(cdOffset + cdSize)).arrayBuffer();
       const cdView = new DataView(cdBuf);
       const files = {};
@@ -174,45 +190,94 @@ layout: null
           }
         }
 
-        files[name] = { size: Number(size), localOffset: Number(localOffset), nameLen };
+        files[name] = { size: Number(size), localOffset: Number(localOffset) };
         ptr += 46 + nameLen + extraLen + commentLen;
       }
 
       if (!files['manifest.json']) throw new Error("manifest.json missing inside ZIP.");
-      log("Found manifest.json! Parsing video details...");
-
-      // 3. Read Manifest
-      const m = files['manifest.json'];
-      const mBuf = await file.slice(m.localOffset + 30 + m.nameLen, m.localOffset + 30 + m.nameLen + m.size).arrayBuffer();
+      
+      // 3. Parse Manifest
+      const mEntry = files['manifest.json'];
+      const mOffset = await getFileDataOffset(file, mEntry.localOffset);
+      const mBuf = await file.slice(mOffset, mOffset + mEntry.size).arrayBuffer();
       const manifest = JSON.parse(new TextDecoder().decode(mBuf));
 
-      log(`Ready to play: ${manifest.name} (${manifest.chunks.length} chunks)`);
+      log(`Found manifest: ${manifest.name} (${manifest.chunks.length} chunks)`);
 
-      // 4. Extract first 15MB to launch playback immediately
-      log("Extracting startup chunks...");
-      const startupCount = Math.min(15, manifest.chunks.length);
-      const chunks = [];
-
-      for (let i = 0; i < startupCount; i++) {
-        const cName = manifest.chunks[i];
-        const entry = files[cName];
-        const raw = await file.slice(entry.localOffset + 30 + entry.nameLen, entry.localOffset + 30 + entry.nameLen + entry.size).arrayBuffer();
-        const u8 = new Uint8Array(raw);
-        for (let b = 0; b < u8.length; b++) u8[b] ^= XOR_KEY;
-        chunks.push(u8);
+      const mimeType = manifest.mime || 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"';
+      if (!MediaSource.isTypeSupported(mimeType)) {
+        throw new Error(`MediaSource does not support MIME type: ${mimeType}`);
       }
 
-      log("Mounting video player...");
-      const blob = new Blob(chunks, { type: manifest.mime });
-      player.src = URL.createObjectURL(blob);
-      
+      // 4. Initialize MediaSource
+      const ms = new MediaSource();
+      player.src = URL.createObjectURL(ms);
+
+      ms.addEventListener('sourceopen', () => {
+        log("MediaSource opened. Configuring SourceBuffer...");
+        const sb = ms.addSourceBuffer(mimeType);
+
+        let chunkIndex = 0;
+        let isReading = false;
+        const TARGET_BUFFER_AHEAD = 15; // Buffer up to 15 seconds ahead
+
+        async function feedBuffer() {
+          // Guard: stop if finished, SourceBuffer is busy, or media source closed
+          if (ms.readyState !== 'open' || sb.updating || isReading) return;
+          if (chunkIndex >= manifest.chunks.length) {
+            if (!sb.updating && ms.readyState === 'open') {
+              try { ms.endOfStream(); } catch (_) {}
+            }
+            return;
+          }
+
+          // Check how many seconds are currently buffered ahead of the playhead
+          const currentTime = player.currentTime;
+          let bufferedEnd = 0;
+          for (let i = 0; i < sb.buffered.length; i++) {
+            if (sb.buffered.start(i) <= currentTime && currentTime <= sb.buffered.end(i)) {
+              bufferedEnd = sb.buffered.end(i);
+              break;
+            }
+          }
+
+          const bufferLead = bufferedEnd - currentTime;
+
+          // If we have enough ahead (and this isn't the initial chunk), yield
+          if (chunkIndex > 0 && bufferLead > TARGET_BUFFER_AHEAD) {
+            return;
+          }
+
+          try {
+            isReading = true;
+            const chunkName = manifest.chunks[chunkIndex];
+            const entry = files[chunkName];
+            if (!entry) throw new Error(`Missing chunk file: ${chunkName}`);
+
+            const decryptedChunk = await readChunk(file, entry);
+            chunkIndex++;
+            sb.appendBuffer(decryptedChunk);
+          } catch (err) {
+            log(`Streaming Error: ${err.message}`);
+          } finally {
+            isReading = false;
+          }
+        }
+
+        // Trigger next chunk when buffer finishes appending
+        sb.addEventListener('updateend', feedBuffer);
+
+        // Periodically verify buffer depth during playback to fetch new chunks
+        player.addEventListener('timeupdate', feedBuffer);
+        player.addEventListener('waiting', feedBuffer);
+
+        // Kickstart the first chunk
+        feedBuffer();
+      });
+
       card.style.display = 'none';
       container.style.display = 'block';
-
-      if (container.requestFullscreen) container.requestFullscreen().catch(() => {});
-      if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {});
-
-      player.play();
+      player.play().catch(() => {});
 
     } catch (err) {
       log("ERROR: " + err.message);
