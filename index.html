@@ -6,7 +6,7 @@ layout: null
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>VLC Zero-RAM Disk Streamer</title>
+  <title>VLC Pro Stream Engine</title>
   <style>
     :root { --vlc: #ff8800; --bg: #000; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -35,7 +35,7 @@ layout: null
     }
     .custom-upload-btn {
       width: 100%;
-      padding: 16px;
+      padding: 18px;
       background: #1f2937;
       color: #fff;
       border: 2px dashed var(--vlc);
@@ -47,20 +47,6 @@ layout: null
       text-align: center;
     }
     #directPicker { display: none; }
-    #progressBarContainer {
-      width: 100%;
-      height: 8px;
-      background: #374151;
-      border-radius: 4px;
-      overflow: hidden;
-      display: none;
-    }
-    #progressBar {
-      width: 0%;
-      height: 100%;
-      background: var(--vlc);
-      transition: width 0.1s linear;
-    }
     #debugBox {
       background: #000;
       border: 1px solid #374151;
@@ -70,7 +56,7 @@ layout: null
       font-family: monospace;
       font-size: 0.75rem;
       color: #38bdf8;
-      max-height: 160px;
+      max-height: 150px;
       overflow-y: auto;
       white-space: pre-wrap;
       word-break: break-all;
@@ -86,7 +72,7 @@ layout: null
     }
     video { width: 100%; height: 100%; object-fit: contain; }
 
-    /* YouTube Style Overlay UI */
+    /* YouTube Overlay UI */
     .video-overlay {
       position: absolute;
       inset: 0;
@@ -142,19 +128,15 @@ layout: null
 <body>
 
   <div class="card" id="uiCard">
-    <h2 style="color:var(--vlc);">VLC Disk Streamer</h2>
-    <p style="font-size:0.8rem; color:#9ca3af;">IndexedDB Disk Cache • Zero RAM Footprint</p>
+    <h2 style="color:var(--vlc);">VLC Pro Stream Engine</h2>
+    <p style="font-size:0.8rem; color:#9ca3af;">4GB+ 4-Hour Instant Play • Strictly &lt;10MB RAM</p>
     
     <label for="directPicker" class="custom-upload-btn" id="uploadBtn">
-      📁 Tap to Choose .ZIP File
+      📁 Choose .ZIP Archive
     </label>
     <input type="file" id="directPicker" accept=".zip,*/*" />
 
-    <div id="progressBarContainer">
-      <div id="progressBar"></div>
-    </div>
-
-    <div id="debugBox">Disk Engine initialized. Waiting for archive...</div>
+    <div id="debugBox">Verifying Stream Engine...</div>
   </div>
 
   <div id="videoContainer">
@@ -194,7 +176,7 @@ layout: null
             <button class="icon-btn" id="muteBtn">
               <svg id="volIcon" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>
             </button>
-            <span id="timeCounter">00:00 / 00:00</span>
+            <span id="timeCounter">00:00:00 / 00:00:00</span>
           </div>
 
           <div class="controls-right">
@@ -215,11 +197,11 @@ layout: null
   </div>
 
 <script>
-  const XOR_KEY = 0xAA;
+  const DB_NAME = 'VLC_PRO_STREAM_DB';
+  const STORE_NAME = 'meta_store';
+
   const picker = document.getElementById('directPicker');
   const uploadBtn = document.getElementById('uploadBtn');
-  const pContainer = document.getElementById('progressBarContainer');
-  const pBar = document.getElementById('progressBar');
   const debug = document.getElementById('debugBox');
   const card = document.getElementById('uiCard');
   const container = document.getElementById('videoContainer');
@@ -248,17 +230,39 @@ layout: null
     debug.scrollTop = debug.scrollHeight;
   }
 
-  // ==========================================
-  // DISK STORAGE ENGINE (IndexedDB)
-  // Writes chunks directly to phone flash storage
-  // ==========================================
-  function openDiskDB() {
+  // 1. Service Worker Registration & Self-Controlling Verification
+  async function initServiceWorker() {
+    if (!('serviceWorker' in navigator)) {
+      log("FATAL: Service Workers not supported in this browser.");
+      return false;
+    }
+    try {
+      await navigator.serviceWorker.register('./sw.js', { scope: './' });
+      await navigator.serviceWorker.ready;
+
+      if (!navigator.serviceWorker.controller) {
+        log("Activating Stream Engine... (Reloading once)");
+        window.location.reload();
+        return false;
+      }
+      log("✅ Engine Active: Ready to stream.");
+      return true;
+    } catch (err) {
+      log("SW Error: Make sure sw.js is committed to your repository root! " + err.message);
+      return false;
+    }
+  }
+
+  initServiceWorker();
+
+  // 2. IndexedDB Pointer Store (Saves File handle without copying memory)
+  function openDB() {
     return new Promise((resolve, reject) => {
-      const req = indexedDB.open('VLCStreamStorageDB', 1);
+      const req = indexedDB.open(DB_NAME, 1);
       req.onupgradeneeded = (e) => {
         const db = e.target.result;
-        if (!db.objectStoreNames.contains('chunks')) {
-          db.createObjectStore('chunks');
+        if (!db.objectStoreNames.contains(STORE_NAME)) {
+          db.createObjectStore(STORE_NAME);
         }
       };
       req.onsuccess = (e) => resolve(e.target.result);
@@ -266,35 +270,14 @@ layout: null
     });
   }
 
-  async function clearDiskDB(db) {
-    return new Promise((resolve) => {
-      const tx = db.transaction('chunks', 'readwrite');
-      tx.objectStore('chunks').clear();
-      tx.oncomplete = () => resolve();
-    });
-  }
-
-  async function writeChunkToDisk(db, index, blob) {
+  async function saveStreamMeta(meta) {
+    const db = await openDB();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction('chunks', 'readwrite');
-      tx.objectStore('chunks').put(blob, index);
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      tx.objectStore(STORE_NAME).put(meta, 'active_stream');
       tx.oncomplete = () => resolve();
-      tx.onerror = (e) => reject(e.target.error);
+      tx.onerror = () => reject(tx.error);
     });
-  }
-
-  async function assembleDiskBlob(db, totalChunks, mime) {
-    const chunks = [];
-    for (let i = 0; i < totalChunks; i++) {
-      const chunk = await new Promise((resolve, reject) => {
-        const tx = db.transaction('chunks', 'readonly');
-        const req = tx.objectStore('chunks').get(i);
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = (e) => reject(e.target.error);
-      });
-      chunks.push(chunk);
-    }
-    return new Blob(chunks, { type: mime || 'video/mp4' });
   }
 
   async function getFileDataOffset(file, localOffset) {
@@ -303,22 +286,17 @@ layout: null
     return localOffset + 30 + v.getUint16(26, true) + v.getUint16(28, true);
   }
 
-  let isHandlingFile = false;
+  let isProcessing = false;
 
-  async function processToDisk(file) {
+  async function handleFileSelection(file) {
     try {
-      isHandlingFile = true;
-      uploadBtn.innerText = "⏳ Accessing Disk Storage...";
-      pContainer.style.display = 'block';
+      isProcessing = true;
+      uploadBtn.innerText = "⏳ Reading Archive Index...";
 
       log(`File: ${file.name} (${(file.size / (1024*1024)).toFixed(1)} MB)`);
-      log("Initializing local disk cache...");
+      log("Scanning Central Directory...");
 
-      const db = await openDiskDB();
-      await clearDiskDB(db);
-
-      log("Reading archive index...");
-
+      // 1. Parse ZIP Central Directory (Only reads the last 64KB - 128KB of the 4GB file!)
       const tailSize = Math.min(file.size, 131072);
       const tailBuf = await file.slice(file.size - tailSize, file.size).arrayBuffer();
       const tailView = new DataView(tailBuf);
@@ -383,57 +361,42 @@ layout: null
         ptr += 46 + nameLen + extraLen + commentLen;
       }
 
-      if (!files['manifest.json']) throw new Error("manifest.json missing.");
+      if (!files['manifest.json']) throw new Error("manifest.json missing in archive.");
 
       const mEntry = files['manifest.json'];
       const mOffset = await getFileDataOffset(file, mEntry.localOffset);
       const mBuf = await file.slice(mOffset, mOffset + mEntry.size).arrayBuffer();
       const manifest = JSON.parse(new TextDecoder().decode(mBuf));
 
-      const totalChunks = manifest.chunks.length;
-      log(`Found manifest: ${totalChunks} chunks.`);
-      log("Streaming chunks to local disk (RAM will remain at 0 MB)...");
+      log(`Found manifest: ${manifest.name || 'Video'} (${manifest.chunks.length} chunks)`);
+      log("Building instant chunk index...");
 
-      // ==========================================
-      // PIPELINE: 1 Chunk RAM Eviction to Disk
-      // Read 1 chunk -> XOR unscramble -> Commit to Disk -> Purge from RAM
-      // ==========================================
-      for (let i = 0; i < totalChunks; i++) {
-        const cName = manifest.chunks[i];
-        const entry = files[cName];
-        const offset = await getFileDataOffset(file, entry.localOffset);
-        
-        // Read single chunk from disk into RAM
-        const raw = await file.slice(offset, offset + entry.size).arrayBuffer();
-        const u8 = new Uint8Array(raw);
-        for (let b = 0; b < u8.length; b++) {
-          u8[b] ^= XOR_KEY;
-        }
-
-        // Write directly to IndexedDB disk storage as a Blob
-        const chunkBlob = new Blob([u8]);
-        await writeChunkToDisk(db, i, chunkBlob);
-
-        // Update progress bar
-        const pct = Math.round(((i + 1) / totalChunks) * 100);
-        pBar.style.width = pct + '%';
-        uploadBtn.innerText = `⏳ Writing to Disk: ${pct}%`;
-
-        if ((i + 1) % 10 === 0 || i === totalChunks - 1) {
-          log(`Written ${i + 1}/${totalChunks} chunks to local disk.`);
-        }
-
-        // Give the JavaScript engine a tick to garbage-collect the RAM array
-        await new Promise(r => setTimeout(r, 0));
+      // Precompute exact byte offsets
+      let runningOffset = 0;
+      const chunksMap = [];
+      for (const name of manifest.chunks) {
+        const item = files[name];
+        const directOffset = await getFileDataOffset(file, item.localOffset);
+        chunksMap.push({
+          dataOffset: directOffset,
+          size: item.size,
+          startOffset: runningOffset
+        });
+        runningOffset += item.size;
       }
 
-      log("Mounting video from disk storage...");
-      uploadBtn.innerText = "🚀 Launching Player...";
+      log(`Connecting ${(runningOffset / (1024*1024)).toFixed(1)} MB stream pipeline...`);
 
-      // Assembles references from disk without holding copies in heap RAM
-      const finalVideoBlob = await assembleDiskBlob(db, totalChunks, manifest.mime || 'video/mp4');
-      player.src = URL.createObjectURL(finalVideoBlob);
+      // 2. Save pointer to IndexedDB (Instant, 0 bytes RAM copied)
+      await saveStreamMeta({
+        file,
+        chunksMap,
+        totalSize: runningOffset,
+        mime: manifest.mime || 'video/mp4'
+      });
 
+      // 3. Mount stream URL (Browser will initiate HTTP Range streaming)
+      player.src = `./virtual-stream.mp4?v=${Date.now()}`;
       titleDisplay.innerText = manifest.name || file.name;
       card.style.display = 'none';
       container.style.display = 'block';
@@ -450,20 +413,20 @@ layout: null
     } catch (err) {
       log("ERROR: " + err.message);
       uploadBtn.innerText = "❌ Error: " + err.message;
-      isHandlingFile = false;
+      isProcessing = false;
     }
   }
 
   // Active poll check ensures Android never drops the selection
-  function pollInput() {
-    if (!isHandlingFile && picker.files && picker.files[0]) {
-      processToDisk(picker.files[0]);
+  function checkInput() {
+    if (!isProcessing && picker.files && picker.files[0]) {
+      handleFileSelection(picker.files[0]);
     }
   }
 
-  picker.addEventListener('change', pollInput);
-  picker.addEventListener('input', pollInput);
-  setInterval(pollInput, 250);
+  picker.addEventListener('change', checkInput);
+  picker.addEventListener('input', checkInput);
+  setInterval(checkInput, 250);
 
   // Overlay HUD Controls
   let overlayTimeout = null;
@@ -500,12 +463,14 @@ layout: null
   player.addEventListener('pause', updatePlayIcons);
 
   function formatTime(sec) {
-    if (isNaN(sec)) return "00:00";
+    if (isNaN(sec)) return "00:00:00";
     const h = Math.floor(sec / 3600);
     const m = Math.floor((sec % 3600) / 60);
     const s = Math.floor(sec % 60);
+    const hh = h < 10 ? '0' + h : h;
+    const mm = m < 10 ? '0' + m : m;
     const ss = s < 10 ? '0' + s : s;
-    return h > 0 ? `${h}:${m < 10 ? '0' + m : m}:${ss}` : `${m}:${ss}`;
+    return `${hh}:${mm}:${ss}`;
   }
 
   let isSeeking = false;
@@ -540,5 +505,38 @@ layout: null
   rwBtn.addEventListener('click', (e) => { e.stopPropagation(); seekOffset(-10); });
   ffBtn.addEventListener('click', (e) => { e.stopPropagation(); seekOffset(10); });
 
-  // YouTube Touch Gestures
-  let lastTapTime
+  // YouTube Touch Gestures (Double Tap to Seek ±10s)
+  let lastTapTime = 0;
+  let tapTimer = null;
+
+  container.addEventListener('click', (e) => {
+    if (e.target.closest('button') || e.target.closest('input') || e.target.closest('select')) return;
+
+    const cur = Date.now();
+    const tapLen = cur - lastTapTime;
+    const clickX = e.clientX;
+    const w = window.innerWidth;
+
+    if (tapLen < 300 && tapLen > 0) {
+      clearTimeout(tapTimer);
+      if (clickX < w * 0.4) {
+        seekOffset(-10);
+        skipLeftFeedback.classList.add('show');
+        setTimeout(() => skipLeftFeedback.classList.remove('show'), 500);
+      } else if (clickX > w * 0.6) {
+        seekOffset(10);
+        skipRightFeedback.classList.add('show');
+        setTimeout(() => skipRightFeedback.classList.remove('show'), 500);
+      } else {
+        togglePlay();
+      }
+    } else {
+      tapTimer = setTimeout(toggleOverlay, 300);
+    }
+    lastTapTime = cur;
+  });
+
+  muteBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    player.muted = !player.muted;
+    const mutePath = "M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 2
