@@ -20,14 +20,18 @@ layout: null
       align-items: center;
       justify-content: center;
       padding: 16px;
+      user-select: none;
+      -webkit-user-select: none;
     }
+    input, select, button { user-select: auto; -webkit-user-select: auto; }
+
     .card {
       background: #111827;
       border: 1px solid #1f2937;
       border-radius: 14px;
       padding: 24px;
       width: 100%;
-      max-width: 420px;
+      max-width: 440px;
       display: flex;
       flex-direction: column;
       gap: 16px;
@@ -47,6 +51,7 @@ layout: null
       text-align: center;
     }
     #directPicker { display: none; }
+
     #debugBox {
       background: #000;
       border: 1px solid #374151;
@@ -61,6 +66,7 @@ layout: null
       white-space: pre-wrap;
       word-break: break-all;
     }
+
     #videoContainer {
       display: none;
       position: fixed;
@@ -69,10 +75,10 @@ layout: null
       height: 100vh;
       background: #000;
       z-index: 9999;
+      overflow: hidden;
     }
     video { width: 100%; height: 100%; object-fit: contain; }
 
-    /* YouTube Overlay UI */
     .video-overlay {
       position: absolute;
       inset: 0;
@@ -129,14 +135,14 @@ layout: null
 
   <div class="card" id="uiCard">
     <h2 style="color:var(--vlc);">VLC Pro Stream Engine</h2>
-    <p style="font-size:0.8rem; color:#9ca3af;">4GB+ Instant Play • Under 10MB RAM</p>
+    <p style="font-size:0.8rem; color:#9ca3af;">Instant Playback • Strictly &lt;10MB RAM • Full Scrubbing</p>
     
     <label for="directPicker" class="custom-upload-btn" id="uploadBtn">
       📁 Choose .ZIP Archive
     </label>
     <input type="file" id="directPicker" accept=".zip,*/*" />
 
-    <div id="debugBox">Initializing worker...</div>
+    <div id="debugBox">Connecting Stream Engine...</div>
   </div>
 
   <div id="videoContainer">
@@ -197,9 +203,6 @@ layout: null
   </div>
 
 <script>
-  const DB_NAME = 'VLC_PRO_STREAM_DB';
-  const STORE_NAME = 'meta_store';
-
   const picker = document.getElementById('directPicker');
   const uploadBtn = document.getElementById('uploadBtn');
   const debug = document.getElementById('debugBox');
@@ -230,11 +233,11 @@ layout: null
     debug.scrollTop = debug.scrollHeight;
   }
 
-  // 1. Non-Hanging Relative Service Worker Registration
-  async function initServiceWorker() {
+  // 1. Initialize Service Worker
+  async function initWorker() {
     if (!('serviceWorker' in navigator)) {
       log("FATAL: Service Workers not supported.");
-      return false;
+      return;
     }
     try {
       const swUrl = new URL('sw.js', window.location.href).href;
@@ -243,52 +246,16 @@ layout: null
 
       if (navigator.serviceWorker.controller) {
         log("✅ Engine Active: Ready to stream.");
-        return true;
-      }
-
-      return new Promise((resolve) => {
+      } else {
         navigator.serviceWorker.addEventListener('controllerchange', () => {
           log("✅ Engine Active: Ready to stream.");
-          resolve(true);
         }, { once: true });
-
-        setTimeout(() => {
-          log("✅ Engine Active: Ready to stream.");
-          resolve(true);
-        }, 800);
-      });
+      }
     } catch (err) {
-      log("SW Error: Ensure sw.js is deployed in repo root. " + err.message);
-      return false;
+      log("SW Error: " + err.message);
     }
   }
-
-  initServiceWorker();
-
-  // 2. IndexedDB Pointer Store
-  function openDB() {
-    return new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME, 1);
-      req.onupgradeneeded = (e) => {
-        const db = e.target.result;
-        if (!db.objectStoreNames.contains(STORE_NAME)) {
-          db.createObjectStore(STORE_NAME);
-        }
-      };
-      req.onsuccess = () => resolve(e.target.result);
-      req.onerror = () => reject(e.target.error);
-    });
-  }
-
-  async function saveStreamMeta(meta) {
-    const db = await openDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
-      tx.objectStore(STORE_NAME).put(meta, 'active_stream');
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
-  }
+  initWorker();
 
   async function getFileDataOffset(file, localOffset) {
     const hdrBuf = await file.slice(localOffset, localOffset + 30).arrayBuffer();
@@ -298,15 +265,14 @@ layout: null
 
   let isProcessing = false;
 
-  async function handleFileSelection(file) {
+  async function startDirectStream(file) {
     try {
       isProcessing = true;
-      uploadBtn.innerText = "⏳ Parsing ZIP Index...";
+      uploadBtn.innerText = "⏳ Parsing ZIP Headers...";
 
       log(`File: ${file.name} (${(file.size / (1024*1024)).toFixed(1)} MB)`);
-      log("Reading Central Directory (from tail)...");
 
-      // 1. Parse ZIP Central Directory (Reads only ~128KB regardless of 4GB+ size)
+      // Read ZIP Central Directory (only last 128KB)
       const tailSize = Math.min(file.size, 131072);
       const tailBuf = await file.slice(file.size - tailSize, file.size).arrayBuffer();
       const tailView = new DataView(tailBuf);
@@ -333,7 +299,7 @@ layout: null
             break;
           }
         }
-        if (eocd === -1) throw new Error("Invalid ZIP archive.");
+        if (eocd === -1) throw new Error("Invalid ZIP file.");
         const eocdSlice = await file.slice(eocd, eocd + 22).arrayBuffer();
         const ev = new DataView(eocdSlice);
         cdSize = BigInt(ev.getUint32(12, true));
@@ -371,7 +337,7 @@ layout: null
         ptr += 46 + nameLen + extraLen + commentLen;
       }
 
-      if (!files['manifest.json']) throw new Error("manifest.json missing.");
+      if (!files['manifest.json']) throw new Error("manifest.json missing inside ZIP.");
 
       const mEntry = files['manifest.json'];
       const mOffset = await getFileDataOffset(file, mEntry.localOffset);
@@ -379,7 +345,7 @@ layout: null
       const manifest = JSON.parse(new TextDecoder().decode(mBuf));
 
       log(`Found: ${manifest.name || 'Video'} (${manifest.chunks.length} chunks)`);
-      log("Building byte lookup table...");
+      log("Building instant range map...");
 
       let runningOffset = 0;
       const chunksMap = [];
@@ -394,18 +360,29 @@ layout: null
         runningOffset += item.size;
       }
 
-      log(`Mounting stream (${(runningOffset / (1024*1024)).toFixed(1)} MB)...`);
+      // Hand index metadata to the Service Worker
+      const reg = await navigator.serviceWorker.ready;
+      const swTarget = navigator.serviceWorker.controller || reg.active;
+      const channel = new MessageChannel();
 
-      // 2. Persist metadata pointer to IndexedDB
-      await saveStreamMeta({
-        file,
-        chunksMap,
-        totalSize: runningOffset,
-        mime: manifest.mime || 'video/mp4'
+      swTarget.postMessage({
+        type: 'INIT_META',
+        payload: {
+          file,
+          chunksMap,
+          totalSize: runningOffset,
+          mime: manifest.mime || 'video/mp4'
+        }
+      }, [channel.port2]);
+
+      await new Promise((resolve) => {
+        channel.port1.onmessage = resolve;
       });
 
-      // 3. Hand range-intercepted route directly to native hardware player
-      player.src = `./virtual-stream.mp4?v=${Date.now()}`;
+      log("Mounting instant stream pipeline...");
+
+      // Point player to the virtual Range route
+      player.src = `./stream-video.mp4?v=${Date.now()}`;
       titleDisplay.innerText = manifest.name || file.name;
       card.style.display = 'none';
       container.style.display = 'block';
@@ -428,10 +405,9 @@ layout: null
 
   function checkInput() {
     if (!isProcessing && picker.files && picker.files[0]) {
-      handleFileSelection(picker.files[0]);
+      startDirectStream(picker.files[0]);
     }
   }
-
   picker.addEventListener('change', checkInput);
   picker.addEventListener('input', checkInput);
   setInterval(checkInput, 250);
@@ -513,7 +489,7 @@ layout: null
   rwBtn.addEventListener('click', (e) => { e.stopPropagation(); seekOffset(-10); });
   ffBtn.addEventListener('click', (e) => { e.stopPropagation(); seekOffset(10); });
 
-  // YouTube Touch Gestures
+  // YouTube Touch Gestures (Double Tap to Seek ±10s)
   let lastTapTime = 0;
   let tapTimer = null;
 
@@ -547,4 +523,21 @@ layout: null
   muteBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     player.muted = !player.muted;
-    const mutePath = "M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73
+    const mutePath = "M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z";
+    const unmutePath = "M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z";
+    volIcon.querySelector('path').setAttribute('d', player.muted ? mutePath : unmutePath);
+  });
+
+  speedPicker.addEventListener('change', (e) => {
+    e.stopPropagation();
+    player.playbackRate = parseFloat(speedPicker.value);
+    showOverlay();
+  });
+
+  fsBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (!document.fullscreenElement) {
+      if (container.requestFullscreen) await container.requestFullscreen();
+      if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {});
+    } else {
+      if (document.exitFullscreen) awai
